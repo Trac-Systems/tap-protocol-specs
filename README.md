@@ -240,7 +240,7 @@ Valid trades are fillable by inscribing a token-trade inscription that specifies
 
 The internal function set "token-auth" allows 3rd parties (authorities) to independently issue signed redeem inscriptions. These signed redeem inscriptions may be inscribed by anyone and authorized tokens being sent to recipients. This allows for custom logic to be specified about what tokens should go where and when. 
 
-This makes TAP basically a no-knowledge protocol within Ordinals as it doesn't need to know the details of custom logic provided by 3rd parties. Unlike zk-rollups, token-auth relies solely on message signatures and does not require sequenzers or L2 mediators. Token-auth can even be used to connect with zk-rollup solutions, adding an extra layer of authenticity.
+This makes TAP basically a no-knowledge protocol within Ordinals as it doesn't need to know the details of custom logic provided by 3rd parties. Unlike zk-rollups, token-auth relies solely on message signatures and does not require sequencers or L2 mediators. Token-auth can even be used to connect with zk-rollup solutions, adding an extra layer of authenticity.
 
 token-auth does not rely on witness data hacking. All operations are clearly contained within the Ordinal envelope's data and thus easily provable by any indexer or individual.
 
@@ -250,7 +250,7 @@ Typical use-cases for token-auth are gamification (e.g. convert points to tokens
 
 To create an authority, a special token-auth inscription must be sent and tapped with an address that holds authorized tokens.
 
-Manual creation of token-auth code is not recommended as it requires message signatures. See the example script (https://github.com/BennyTheDev/tap-token-auth-signatures) that helps to generate signed token auths. Token-auth uses secp256k1 signatures. See https://github.com/paulmillr/noble-secp256k1 as an example implementation.
+Manual creation of token-auth code is not recommended as it requires message signatures. See the boilerplate (https://github.com/Trac-Systems/tap-protocol-token-auth-boilerplate) that helps to generate signed token auths. Token-auth uses secp256k1 signatures. See https://github.com/paulmillr/noble-secp256k1 as an example implementation.
 
 Example:
 
@@ -341,6 +341,183 @@ To cancel a "token-auth", the authority must send an inscription like below to i
 
 - "cancel" must point to an existing an non-cancelled "token-auth" of the authority.
 - Once tapped, no further redeems may be executed on the inscribed "token-auth", indefinitely.
+
+#### privilege-auth
+
+The internal function set "privilege-auth" allows 3rd parties (authorities) to implement token/unat/collectible whitelists, launchpads and general-purpose provenance for file hashes (sha256). 
+
+Privilege authorities will be available from activation block height 841682.
+
+#### Create an privilege authority
+
+To create a privilege authority, a special privilege-auth inscription must be sent and tapped.
+
+Manual creation of privilege-auth code is not recommended as it requires message signatures. See the boilerplate (https://github.com/Trac-Systems/tap-protocol-privilege-auth-boilerplate) that helps to generate signed privileges. Privilege-auth uses secp256k1 signatures. See https://github.com/paulmillr/noble-secp256k1 as an example implementation.
+
+Example:
+
+```javascript
+{
+   "p":"tap",
+   "op":"privilege-auth",
+   "sig":{
+      "v":"0",
+      "r":"86508516128453602592995353796555408942165629541645840597158531627249758208446",
+      "s":"34207792571992691071321015990261453361621215423082720220623653945331263914520"
+   },
+   "hash":"a7a8fe6a46d7dd3aac3518ecdc97577be5319eb5ae8588eee9c92ad96eed3b68",
+   "salt":"0.41631368860188056",
+   "auth":{
+      "name":"Some privilege authority"
+   }
+}
+```
+
+### Token deployments
+
+Token deployments work exactly like regular deployments as described further above but a new attribute called "prv" must be added, pointing to an existing, active (not cancelled) token authority by using its inscription id (not number).
+
+If there is no valid authority at the given inscription id for "prv", the deployment will fail. If the authority is valid, only the authority specified in "prv" will be allowed to specify what address is allowed to mint tokens.
+
+The authority still has to respect all given rules as of the deployment inscription. It cannot override limits, max supply, tickers.
+
+Example for regular token deploys on the TAP Protocol:
+
+```javascript
+{ 
+  "p": "tap",
+  "op": "token-deploy",
+  "tick": "tap",
+  "max": "21000000",
+  "lim": "1000",
+  "prv" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
+}
+```
+
+Example for DMT token deploys on the TAP Protocol:
+
+```javascript
+{
+"p": "tap",
+"op": "dmt-deploy",
+"elem": "63b5bd2e28c043c4812981718e65d202ab8f68c0f6a1834d9ebea49d8fac7e62i0",
+"tick": "nat",
+"dt": "n",
+"prv" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
+}
+```
+
+### Token mints
+
+Token mints work exactly like regular mints as described further above but a new attribute called "prv" must be provided.
+"prv" must contain an object specifying the authority's signature and the wallet address that is allowed to mint.
+"salt" can be used to pass extra data to make sure the resulting hash is always unique. 
+It is however recommended to use non-random salts (e.g. inscription ids) if the authority has the requirement internally to be able to re-index at all times.
+
+The authority must broadcast the signed inscription text via an offchain mechanism of its choice.
+
+The signature given with the "prv" attribute object must match the signature of the authority. Only if both resulting public keys match, the mint is valid.
+If the the resulting keys do not match, or the signature is invalid, the mint will be rejected.
+
+If any other address other than the one given tries to mint, the mint will fail and the authority has to re-issue a signed inscription with a new salt since hashes are unique across the protocol.
+
+Example mint inscription text on the TAP Protocol:
+
+```javascript
+{
+   "p":"tap",
+   "op":"token-mint",
+   "tick":"tap",
+   "amt":1000,
+   "prv":{
+      "sig":{
+         "v":"0",
+         "r":"106344897850645353394557411159466118155649878604746085611434406050662507764701",
+         "s":"5566788626956401066167017793946358967684734480695302740591785789681566880049"
+      },
+      "hash":"931c0b44c1811ba4a8ac7c696a7f0e664ea85b18c34ec32d492fcc99fd7ee4a7",
+      "address":"tb1pf9jluy2g797290uq5nutqm2yuynds6uf868ytc37nht53c5j8w3s7nfta7",
+      "salt":"0.3624804148476173"
+   }
+}
+```
+
+Example DMT mint inscription text on the TAP Protocol:
+
+```javascript
+{
+   "p":"tap",
+   "op":"dmt-mint",
+   "tick":"nat",
+   "blk":840000,
+   "dep":"825e287bb7dd163ed633110e31bc6abb6c80815ca68b7dd3cc71d729ecaaa3dci0",
+   "prv":{
+      "sig":{
+         "v":"0",
+         "r":"10387661166049122705773272120018537684460586485610280053381057207269720400370",
+         "s":"47937738938877326713978443360828324693873763102762802539146112797003515228281"
+      },
+      "hash":"1056344a88698e989aa6799c46d72f5b110fb26ff0426c1a84a6640803b0d74c",
+      "address":"tb1pf9jluy2g797290uq5nutqm2yuynds6uf868ytc37nht53c5j8w3s7nfta7",
+      "salt":"0.3903927009829504"
+   }
+}
+```
+
+### Hashed Verifications
+
+Hash verifications within privileges are a general-purpose mechanism to determine what file hash (sha256) may be assigned to a given address.
+
+If an authority issues such a signed inscription text, it can signal that it sees the address as the valid owner of that hash.
+
+An interesting aspect of hashed verfications that these might be used as collectibles as they contain verified file hashes of linked or offchain content.
+
+Different authorities may have different opinions. That's why it's important that projects managing authorities, must broadcast their authority inscription ids via offchain channels to provide the source of truth.
+
+Like deployments & mints, a signature and the inscription id of the authority must be given ("prv"). 
+
+The attribute "verify" must contain an sha256 hash, representing a hash over file contents.
+"col" must be used to specify a "collection" name to allow for organizing the hashes. Maximum allowed symbols: 512 (as of unicode).
+"seq" must be an unsigned integer, that may be arbitrary and not larger than 9007199254740991.
+
+If "seq" is passed as string, the verification will fail.
+"col" may be an empty string but must be present.
+
+"salt" can be used to pass extra data to make sure the resulting hash is always unique. 
+It is however recommended to use non-random salts (e.g. inscription ids) if the authority has the requirement internally to be able to re-index at all times.
+
+```javascript
+{
+   "p":"tap",
+   "op":"privilege-auth",
+   "sig":{
+      "v":"0",
+      "r":"102486240205705464835967036484087123773428387054126262751119766795035126943608",
+      "s":"2461281772805092833125901827999803585726660443752983045919874042616328309644"
+   },
+   "hash":"81906992bfffa87f48cdeaecff29bac840553ac0bdfb9288bed0cab6de573efc",
+   "address":"tb1pltn4mqlpxxswxhmkj2ejdd0z98v74nr0xxdresvwvp5cyvctm0zs3m750l",
+   "salt":"0.9698534940599512",
+   "prv":"e349a9126a9476eb534457a7e78c748aeca67ec4d53fa9f0772408fb7233a9fei0",
+   "verify":"cea505f61f375ea2d8ea56f593e6b436f963753616c2095e755cb5ca4a6df85c",
+   "col":"super collection",
+   "seq":111
+}
+```
+
+#### Cancel a privilege authority
+
+To cancel a "privilege-auth", the authority must send an inscription like below to its associated address and tap.
+From this point on, no mints or verifications can take place anymore that originally have been managed by the authority.
+This can be used for blockouts, collection finalization etc.
+
+```javascript
+{
+   "p":"tap",
+   "op":"privilege-auth",
+   "cancel" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
+}
+```
 
 #### DMT (Digital Matter Theory) Tokens
 
