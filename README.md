@@ -93,7 +93,7 @@ For external functions this means:
 
 # Internal
 
-#### token-send
+### token-send
 
 Internally, there exists a new function called "token-send", which enables mass-transfer of different tokens to many recipients.
 
@@ -135,7 +135,7 @@ There is no restriction on the amount of items (receivers).
 }
 ```
 
-#### token-trade
+### token-trade
 
 The internal function set "token-trade" consists of 3 functions to allow text-inscription based trading. By inscribing a trade inscription as seller, a trade is being added to the Ordinals collection and can be picked up by any buyer for the duration of a valid period in blocks. 
 
@@ -236,7 +236,7 @@ Valid trades are fillable by inscribing a token-trade inscription that specifies
 - Fees are only applicable on amounts and decimals that allow 0.3% to be applied. This means there may be zero fees if not applicable.
 - A trade has been filled successfully from an indexer point of view, if all conditions are met and all balances are credited correctly.
 
-#### token-auth
+### token-auth
 
 The internal function set "token-auth" allows 3rd parties (authorities) to independently issue signed redeem inscriptions. These signed redeem inscriptions may be inscribed by anyone and authorized tokens being sent to recipients. This allows for custom logic to be specified about what tokens should go where and when. 
 
@@ -342,7 +342,7 @@ To cancel a "token-auth", the authority must send an inscription like below to i
 - "cancel" must point to an existing an non-cancelled "token-auth" of the authority.
 - Once tapped, no further redeems may be executed on the inscribed "token-auth", indefinitely.
 
-#### privilege-auth
+### privilege-auth
 
 The internal function set "privilege-auth" allows 3rd parties (authorities) to implement token/unat/collectible whitelists, launchpads and general-purpose provenance for file hashes (sha256). 
 
@@ -373,7 +373,7 @@ Example:
 }
 ```
 
-### Token deployments
+#### Token deployments
 
 Token deployments work exactly like regular deployments as described further above but a new attribute called "prv" must be added, pointing to an existing, active (not cancelled) token authority by using its inscription id (not number).
 
@@ -407,7 +407,7 @@ Example for DMT token deploys on the TAP Protocol:
 }
 ```
 
-### Token mints
+#### Token mints
 
 Token mints work exactly like regular mints as described further above but a new attribute called "prv" must be provided.
 "prv" must contain an object specifying the authority's signature and the wallet address that is allowed to mint.
@@ -464,7 +464,7 @@ Example DMT mint inscription text on the TAP Protocol:
 }
 ```
 
-### Hashed Verifications
+#### Hashed Verifications
 
 Hash verifications within privileges are a general-purpose mechanism to determine what file hash (sha256) may be assigned to a given address.
 
