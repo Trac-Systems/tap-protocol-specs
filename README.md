@@ -1,4 +1,4 @@
-# TAP Introduction
+# TAP Introduction (Whitepaper)
 TAP is an extendible OrdFi-enabling protocol that includes - but is not limited to - the TAP token standard.
 
 TAP works entirely without the use of L2 chains or other overly complex mechanics, but utilizes tapping - a simple mechanism to verify transactions within the protocol.
