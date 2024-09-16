@@ -31,7 +31,7 @@ As mentioned above, TAP tokens work in the exact same way as BRC-20 tokens. Ther
 
 || TAP | BRC-20 |
 |-------------| ------------- | ------------- |
-| Allowed ticker lengths | 3 and 5 to 32 (UTF16)  | 4 letters |
+| Allowed ticker lengths | 3 and 5 to 32 (UTF16)  | 4-5 letters |
 | Protocol | tap  | brc-20  |
 | Deploy op | token-deploy  | deploy  |
 | Mint op | token-mint  | mint  |
