@@ -37,6 +37,8 @@ As mentioned above, TAP tokens work in the exact same way as BRC-20 tokens. Ther
 | Mint op | token-mint  | mint  |
 | Transfer op | token-transfer  | transfer  |
 
+From Bitcoin Block 861,576 onwards the full ticker range of 1 - 32 symbols are supported within the TAP Protocol.
+
 #### Ord Wallet Versioning
 
 The TAP Protocol follows a defined upgrade path for indexers to support and benefit from ord wallet updates. Ord wallet upgrades are followed conservatively.
@@ -47,7 +49,9 @@ Indexers must make sure to follow the ord wallet versions and activation heights
 
 | Ord Wallet | Block Activation Height |
 |------------- | ------------- |
-| 0.14.1 | 801993 |
+| 0.14.1 | 779832 |
+| 0.19.1 | 779832 |
+| 0.20.0 | 779832 |
 | 1.0 | TBA |
 
 #### The Jubilee
@@ -519,11 +523,27 @@ This can be used for blockouts, collection finalization etc.
 }
 ```
 
+### BRC-20
+
+ONLY deployments as of the BRC-20 protocol specs from block 779,832 to block 861,575 are being indexed.
+No mints, transfers or any other function is allowed to be performed on them.
+
+Each deployment must contain a "prv" field with the inscription id 'c14d3de97cecc573d86592240ef38bf5ba298c8c2eaf68e17b99dbbeedbab7e4i0'.
+This inscription id represents a system privilege-authority that - once enabled - will allow for minting of the deployed BRC-20 tickers as of the privilege-authority specs above.
+
+Once the authority enabled minting, the BRC-20 tickers will be available for transfers (internal/external) like any other tokens as of the TAP Protocol specs.
+
+#### Bitmap
+
+The TAP Protocol indexer must properly index Bitmap as of the original specs, without cursed support.
+
 #### DMT (Digital Matter Theory) Tokens
 
-TAP Protocol supports element field 11 as of the DMT specs located at https://digital-matter-theory.gitbook.io/digital-matter-theory/introduction/digital-matter-theory
+TAP Protocol supports elements field 4 (block height), 10 (nonce) and 11 (bits) as of the DMT specs located at https://digital-matter-theory.gitbook.io/digital-matter-theory/introduction/digital-matter-theory
 
 This includes the functions "dmt-deploy" and "dmt-mint" and work according to the DMT specs within the TAP Protocol.
+
+From Bitcoin block 861,576 onwards, Blockdrops for DMT UNats and Bitmaps are supported.
 
 #### Outlook
 
