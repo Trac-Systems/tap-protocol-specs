@@ -95,9 +95,40 @@ For external functions this means:
 
 # Internal
 
+### block-transferables
+
+To prevent grief attacks using the external "token-transfer", account holders can entirely disable this function by inscribing the inscription text below to themselves and tap (=send to yourself) the inscription. 
+This feature is especially important if token-authorities are being used that redeem tokens from their own accounts, as those "token-auth" as internal function.
+
+Once tapped (=inscribed and again sent to yourself), incoming inscribe transfers must be skipped/invalidated such that no subsequent transfers using "token-transfer" aren't possible anymore. 
+Existing transferables stay intact and can be used.
+
+#### Example
+
+```javascript
+{
+  "p" : "tap",
+  "op" : "block-transferables"
+}
+```
+
+### block-transferables
+
+To unblock inscribe transfers, the function below must be tapped (=inscribed and again sent to yourself).
+Once tapped, inscribe transfers will continue to work normally and contribute to the overall transferable amounts of the account again.
+
+#### Example
+
+```javascript
+{
+  "p" : "tap",
+  "op" : "unblock-transferables"
+}
+```
+
 ### token-send
 
-Internally, there exists a new function called "token-send", which enables mass-transfer of different tokens to many recipients.
+Enables mass-transfer of different tokens to many recipients.
 
 There will be more internal functions, so it may be useful to check back here once in a while.
 
