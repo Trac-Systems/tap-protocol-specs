@@ -112,7 +112,7 @@ Existing transferables stay intact and can be used.
 }
 ```
 
-### block-transferables
+### unblock-transferables
 
 To unblock inscribe transfers, the function below must be tapped (=inscribed and again sent to yourself).
 Once tapped, inscribe transfers will continue to work normally and contribute to the overall transferable amounts of the account again.
