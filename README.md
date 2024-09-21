@@ -1,11 +1,11 @@
 # TAP Introduction (Whitepaper)
 TAP is an extendible OrdFi-enabling protocol that includes - but is not limited to - the TAP token standard.
 
-TAP works entirely without the use of L2 chains or other overly complex mechanics, but utilizes tapping - a simple mechanism to verify transactions within the protocol.
+TAP works entirely without the use of L2s, but utilizes tapping - a simple mechanism to verify transactions within the protocol.
 
-The goal of TAP is to built upon what made BRC-20 great but maintaining independence from centralized entities. TAP allows for new features that will be consistently added to the protocol by community driven governance.
+The goal of TAP is to be the most powerful metaprotocol on top of Ordinals with a clear focus on Bitcoin L1. 
 
-The BRC-20 ticker lengths 1,2 and 4 are reserved for future interordinal bridging between BRC-20 and TAP Tokens and cannot be deployed on TAP.
+TAP allows for new features that will be consistently added to the protocol by community driven governance.
 
 # Structure
 
