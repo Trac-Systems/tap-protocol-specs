@@ -570,7 +570,9 @@ The TAP Protocol indexer must properly index Bitmap as of the original specs, wi
 
 TAP Protocol supports elements field 4 (block height), 10 (nonce) and 11 (bits) as of the DMT specs located at https://digital-matter-theory.gitbook.io/digital-matter-theory/introduction/digital-matter-theory
 
-This includes the functions "dmt-deploy" and "dmt-mint" and work according to the DMT specs within the TAP Protocol.
+This includes the functions "dmt-deploy" and "dmt-mint" and work according to the DMT specs within the TAP Protocol. 
+
+**Note:** No dmt token can be cursed **ever**, the prefix `-dmt` does not exist and was not valid before the [Jubilee](#the-jubilee) and is not valid now, being the case no cursed actions count should towards the indexer state.
 
 From Bitcoin block 861,576 onwards, Blockdrops for DMT UNats and Bitmaps are supported.
 
