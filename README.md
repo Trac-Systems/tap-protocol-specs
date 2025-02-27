@@ -45,11 +45,12 @@ Supported updates will be tested and announced in advance, with a reasonable tim
 
 Indexers must make sure to follow the ord wallet versions and activation heights as of the table below:
 
-| Ord Wallet | Block Activation Height |
+| Ord Client | Block Activation Height |
 |------------- | ------------- |
 | 0.14.1 | 779832 |
 | 0.19.1 | 779832 |
 | 0.20.0 | 779832 |
+| 0.22.2 | 779832 |
 | 1.0 | TBA |
 
 #### The Jubilee
@@ -573,6 +574,16 @@ TAP Protocol supports elements field 4 (block height), 10 (nonce) and 11 (bits) 
 This includes the functions "dmt-deploy" and "dmt-mint" and work according to the DMT specs within the TAP Protocol.
 
 From Bitcoin block 861,576 onwards, Blockdrops for DMT UNats and Bitmaps are supported.
+
+#### DMT-NAT Rewards to Bitcoin Miners
+
+From (including) block 885588 onwards, instead of allowing to perform regular "dmt-nat" mints, those will be forwarded to the outputs of the coinbase transaction per block as follows:
+
+- Starting from block 885588, the dmt-mint function will ignore any attempt to mint "dmt-nat" tokens.
+- Instead, the amount of bits per newly minted blocks will be redirected as "dmt-nat" tokens to the output addresses of the coinbase transaction of a block.
+- Based on the BTC value of each output, the "dmt-nat" shares will be calculated. This also includes "op_return" values. E.g.: if there are 2 outputs equally sharing BTC rewards, the "dmt-nat" token rewards will be equally shared, as well.
+- The "dmt-nat" shares will be credited to Bitcoin wallet addressess.
+- Remaining shares that are not being credited (such as op_return shares) are considered burned.
 
 #### Outlook
 
