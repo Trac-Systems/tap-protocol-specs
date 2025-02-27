@@ -498,6 +498,101 @@ Example DMT mint inscription text on the TAP Protocol:
 }
 ```
 
+#### DTA Field
+
+To allow for passing data to sub-indexers and smart contracts (co-processing), several functions allow for the use of a "dta" field.
+This dta field must be indexed for the following functions and rules:
+
+- Supported functions: token-deploy, token-mint, token-transfer, dmt-deploy, dmt-mint, token-auth (redeem), token-send.
+- The dta field is optional.
+- The dta field's data type must be a string.
+- The dta field's max size must be 512 bytes.
+- Invalid data type and max size lead to invalid function calls and the index must be skipped for those.
+- The dta field must be set as attribute of the items collection for functions token-auth (redeem) and token-send.
+- The dta field must also be processed for authorized mints by priv-auth.
+
+NOTE: for dmt-mint and dmt-deploy functions, see the DMT specs as linked below.
+
+Examples:
+
+```javascript
+{ 
+  "p": "tap",
+  "op": "token-deploy",
+  "tick": "tap",
+  "max": "21000000",
+  "lim": "1000",
+  "dta" : "some data"
+}
+```
+
+```javascript
+{ 
+  "p": "tap",
+  "op": "token-mint",
+  "tick": "tap",
+  "amt": "1000",
+  "dta" : "some data"
+}
+```
+
+```javascript
+{ 
+  "p": "tap",
+  "op": "token-transfer",
+  "tick": "tap",
+  "amt": "100",
+  "dta" : "some data"
+}
+```
+
+```javascript
+{
+  "p" : "tap",
+  "op" : "token-send",
+  "items" : [
+     {
+      "tick": "-tap",
+      "amt": "10000",
+      "address" : "bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20",
+      "dta" : "some data"
+     },
+     {
+      "tick": "tap",
+      "amt": "10000",
+      "address" : "bc1p063utyzvjuhkn0g06l5xq6e9nv6p4kjh5yxrwsr94de5zfhrj7csns0aj4",
+      "dta" : "some data"
+     }
+  ]
+}
+```
+
+```javascript
+{
+   "p":"tap",
+   "op":"token-auth",
+   "sig":{
+      "v":"1",
+      "r":"113472523327934685528808901641630457916054343054143422440331961430719594721038",
+      "s":"21393407019197854961723689634443789868582208930187383447036700552814535514199"
+   },
+   "hash":"82e2b0d098dcdab820ff866b011250af8841a6b59cedd7164bb94b63d2598de9",
+   "salt":"0.46074583388095514",
+   "redeem":{
+      "items":[
+         {
+            "tick":"gib",
+            "amt":"546",
+            "address":"bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20",
+            "dta" : "some data"
+         }
+      ],
+      "auth":"fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0",
+      "data":""
+   }
+}
+```
+
 #### Hashed Verifications
 
 Hash verifications within privileges are a general-purpose mechanism to determine what file hash (sha256) may be assigned to a given address.
