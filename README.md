@@ -679,7 +679,7 @@ From (including) block 885588 onwards, instead of allowing to perform regular "d
 - Based on the BTC value of each output, the "dmt-nat" shares will be calculated. This also includes "op_return" values. E.g.: if there are 2 outputs equally sharing BTC rewards, the "dmt-nat" token rewards will be equally shared, as well.
 - The "dmt-nat" shares will be credited to Bitcoin wallet addressess.
 - Remaining shares that are not being credited (such as op_return shares) are considered burned.
-- from block 941848 onwards, miner reward addresses have blocked token-transfer enabled and they need to use "unblock-transferables" to unlock. token-send and token-trade stay disabled. Token auth (redeem) working without change. 
+- from block 941848 onwards, miner reward addresses have token-transfer disabled by default and they need to use "unblock-transferables" to unlock. token-send and token-trade stay disabled. Token auth (redeem) working without change. 
 
 #### Outlook
 
