@@ -681,6 +681,136 @@ From (including) block 885588 onwards, instead of allowing to perform regular "d
 - Remaining shares that are not being credited (such as op_return shares) are considered burned.
 - from block 941848 onwards, miner reward addresses have token-transfer disabled by default and they need to use "unblock-transferables" to unlock. token-send and token-trade stay disabled. Token auth (redeem) working without change. 
 
+#### Generalized DMT Reward Redirection (dmt-redirect)
+
+The "dmt-redirect" op allows the original deployer of an eligible DMT token (see v1 scope below) to replace the default `dmt-mint`-credits-inscriber payout with a `weighted-split` rule across up to eight buckets. Each bucket pays a configured share to a coinbase output, a solo-classified coinbase output (with optional accumulator), or a fixed BTC address. All payouts are auto-credited by the indexer and there is no claim flow involved.
+
+Eligible ticks are DMT deploys (`dmt: true`) whose element targets Bitcoin block field 11 with no pattern (`pat`), except inputs that normalize to `dmt-nat`. The user-supplied `tick` is normalized by prepending `dmt-` (mirroring the `dmt-mint` convention), then compared to `dmt-nat`; any case form is rejected. Prefix-form inputs (`tick: "dmt-nat"` or any `"-..."` value) are rejected by a sanity guard before normalization. The dmt-nat redirect activated at block 885,588 is preserved unchanged and is never reachable via this op. v1 scope is documented below.
+
+**v1 scope.** This version applies to DMT deploys whose element targets Bitcoin block field 11 (bits) and does not specify a pattern (`pat`). Field 4 (height) and field 10 (nonce) deploys, and pattern-based field 11 deploys, are deferred to a v2 spec discussion. The validator rejects redirect inscriptions on out-of-scope deploys; no state is stored.
+
+This op has no global activation height. Conforming indexers honor it from any block once the code is shipped. Each individual rule activates at its own deployer-chosen `act` block, with a protocol-enforced minimum of 144 blocks of advance notice.
+
+#### Example
+
+```javascript
+{
+  "p": "tap",
+  "op": "dmt-redirect",
+  "tick": "bit",
+  "act": 948888,
+  "rule": {
+    "type": "weighted-split",
+    "must_sum_to": 10000,
+    "buckets": [
+      {
+        "name": "pool",
+        "share_bps": 7000,
+        "recipient": { "type": "coinbase-output" }
+      },
+      {
+        "name": "solo",
+        "share_bps": 2000,
+        "recipient": {
+          "type": "solo-coinbase-output",
+          "accumulate_when_no_solo": true
+        }
+      },
+      {
+        "name": "tribute",
+        "share_bps": 1000,
+        "recipient": {
+          "type": "address",
+          "addr": "bc1qxz9nmfg3czfpm6ml025xfsuwx7sa8nlslpwa4f"
+        }
+      }
+    ],
+    "solo_classification": {
+      "tags_substring": [
+        "/solo.ckpool.org/",
+        "Public Pool on Umbrel",
+        "/braiinssolo/",
+        "/Mined @ SoloPool.Com/",
+        "NiceHash"
+      ],
+      "addresses": ["bc1qreaftg3lr53nv84dnxhcvchmswevzlp9tdj2jd"],
+      "ambiguous_block_policy": "treat_as_pool"
+    }
+  }
+}
+```
+
+The conditions for a "dmt-redirect" inscription to be indexed are as follows:
+
+- Cursed inscriptions are rejected (`inscription_number < 0`).
+- The "tick" attribute must resolve to a DeployRecord with `dmt: true`.
+- The user-supplied "tick" must not begin with `-` or `dmt-` (sanity guard, mirroring dmt-mint).
+- After normalization to `dmt-<tick>`, the result must not equal `dmt-nat` (case-insensitive). The block-885,588 dmt-nat path is exempt and out of scope for this op.
+- The deploy's element must target Bitcoin block field 11 (bits) and must not specify a `pat` (pattern). The validator loads the deploy's `DmtElementRecord` and rejects if `fld != 11` or `pat.is_some()`. Pattern-based and field 4 / field 10 deploys are deferred to a v2 spec discussion.
+- The reveal transaction must spend the deploy inscription's UTXO, declared as the Ordinals parent (envelope tag 3) of the `dmt-redirect` inscription. ord-tap-style indexers only record a parent if its sat is actually transferred by the reveal, so a recorded parent is proof that the reveal signer controls the deploy inscription. No separate signing scheme is required — spending the deploy inscription's UTXO is the proof. Whoever currently holds the deploy inscription is the authority for that tick's redirect.
+- Same-transaction deploy + redirect is rejected: if `DeployRecord.ins.txid` equals the redirect inscription's reveal txid, the deploy is a sibling envelope rather than a spent-UTXO parent, and the literal "spend the deploy inscription's UTXO" property would not hold. The deployer can always inscribe the redirect in a follow-up transaction.
+- The "act" attribute must be strictly greater than current block height + 144. Equality with current block + 144 is rejected.
+- The "rule" attribute must contain `"type": "weighted-split"`. No other rule type is recognized.
+- The "rule" => "must_sum_to" attribute must equal 10000.
+- The "rule" => "buckets" array must have between 1 and 8 entries inclusive.
+- The sum of all `share_bps` across buckets must equal `must_sum_to`.
+- Every bucket's `share_bps` must be strictly greater than 0.
+- Every bucket's `name` must be ASCII alphanumeric with `_` or `-`, 1–32 characters; no two buckets in the same rule may share a name.
+- Every bucket's "recipient" => "type" must be one of `coinbase-output`, `solo-coinbase-output`, or `address`.
+- For `address` recipients, the "addr" attribute must be a valid mainnet Bitcoin address.
+- For `solo-coinbase-output` recipients, the optional `accumulate_when_no_solo` attribute must be a boolean and defaults to `true`.
+- If any bucket uses `solo-coinbase-output`, the rule must include a well-formed `solo_classification` object.
+- Within `solo_classification`, each of `tags_substring`, `addresses`, `pool_tags_blocklist`, and `pool_addresses_blocklist` is bounded to ≤ 64 entries.
+- Each address in `solo_classification.addresses` and `solo_classification.pool_addresses_blocklist` must be a valid mainnet Bitcoin address.
+- When `solo_classification` is required, `ambiguous_block_policy` is required and must be exactly `"treat_as_pool"` (default, conservative) or `"treat_as_solo"`. Other values reject.
+- The inscription is processed at creation. No tapping (self-send) is required, matching the dmt-mint and dmt-deploy convention.
+
+#### Recipient types
+
+The "recipient" => "type" attribute of a bucket must be one of the following:
+
+- `coinbase-output`: the bucket share is paid pro-rata to the addresses in the block's coinbase outputs by output value. Identical semantics to the dmt-nat redirect at block 885,588.
+- `solo-coinbase-output`: same as above, but only on solo-classified blocks. On pool-classified blocks, the share's behavior is governed by `accumulate_when_no_solo`. If `true` (default), the share escrows in `redirect-acc/<tick>/solo` and is released to the next solo block. If `false`, the share is burned.
+- `address`: the bucket share is paid to a single configured mainnet BTC address.
+
+#### Solo classification
+
+If any bucket uses the `solo-coinbase-output` recipient type, the rule must define how blocks are classified as solo or pool:
+
+```javascript
+{
+  "tags_substring": ["<utf8 string>", "..."],
+  "addresses": ["<bech32/base58>", "..."],
+  "pool_tags_blocklist": ["<utf8 string>", "..."],
+  "pool_addresses_blocklist": ["<bech32/base58>", "..."],
+  "ambiguous_block_policy": "treat_as_pool"
+}
+```
+
+The `pool_tags_blocklist` and `pool_addresses_blocklist` fields are optional and may be omitted. They are useful primarily for deployers using `ambiguous_block_policy: "treat_as_solo"` or wanting defense-in-depth against adversarial coinbases. With the default `treat_as_pool` failover, the failover correctly handles unknown pools without an explicit blocklist.
+
+A block is classified as follows:
+
+- If any string in `pool_tags_blocklist` appears as a substring of the coinbase scriptSig, OR any address in `pool_addresses_blocklist` is in the coinbase output addresses, the block is POOL.
+- Else, if any string in `tags_substring` appears as a substring of the coinbase scriptSig, OR any address in `addresses` is in the coinbase output addresses, the block is SOLO.
+- Otherwise, the block is classified per `ambiguous_block_policy`. The `ambiguous_block_policy` field is required when a classifier is present, and must be one of `"treat_as_pool"` (conservative — recommended default) or `"treat_as_solo"`.
+
+Pool signals always take precedence over solo signals. Tag matching is case-sensitive substring matching against the raw coinbase scriptSig data.
+
+#### MinerRewardShield interaction
+
+Recipients of `coinbase-output` and `solo-coinbase-output` buckets are subject to the same MinerRewardShield treatment as dmt-nat: from block 941,848 onwards (or this rule's `act`, whichever is later), receiving addresses have token-transfer disabled by default and must use "unblock-transferables" to unlock. token-send and token-trade stay disabled. Token-auth (redeem) works without change.
+
+Recipients of `address` buckets are not shielded.
+
+#### dmt-mint behavior under an active redirect
+
+When an active redirect exists for a tick at block H (`H >= rule.act`), `dmt-mint` inscriptions for that tick at H are ignored — the inscriber-credit branch is skipped before any state is written, including mint audit rows. Per-block credit is computed centrally and credited to the rule's bucket recipients as described above. `dmt-mint` inscriptions processed at H < `rule.act` continue to credit the inscriber normally.
+
+#### Updating a rule
+
+To change a rule, the current holder of the deploy inscription inscribes a new "dmt-redirect" for the same tick (declaring the deploy inscription as parent, same as the first rule) with `act > current_block + 144`. The new rule supersedes the previous one at its own `act` block, not at inscription time, regardless of whether the previous rule is already in force or only scheduled. Until the new rule's `act`, the previous rule remains in force. There is no separate update, revoke, or sunset op. Authority follows the deploy inscription's UTXO — if that UTXO is transferred, authority transfers with it.
+
 #### Outlook
 
 This document and the tracking for the TAP protocol will be continuously worked on and updated. Feel free to join the Discord if you have questions: https://discord.gg/sPyYDa5q6P
