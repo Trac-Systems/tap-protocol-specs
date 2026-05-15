@@ -1,83 +1,94 @@
-# TAP Introduction (Whitepaper)
-TAP is an extendible OrdFi-enabling protocol that includes - but is not limited to - the TAP token standard.
+# TAP Protocol
 
-TAP works entirely without the use of L2s, but utilizes tapping - a simple mechanism to verify transactions within the protocol.
+TAP is an Ordinals metaprotocol for fungible tokens and token backed application logic on Bitcoin L1.
 
-The goal of TAP is to be the most powerful metaprotocol on top of Ordinals with a clear focus on Bitcoin L1. 
+The base token model follows the inscription based flow familiar from BRC-20. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, and sale authorities.
 
-TAP allows for new features that will be consistently added to the protocol by community driven governance.
+The protocol has two layers:
 
-# Structure
+| Layer | Purpose |
+| --- | --- |
+| External token layer | Deploy, mint, and inscribe transferable token balances. This layer is compatible with the usual BRC-20 style marketplace and wallet model. |
+| Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, and privileged mints. |
 
-TAP consists of two parts, external and internal. The external part acts in the exact same way like BRC-20 does. 
+An inscription is considered tapped when it is sent back to the account that owns or controls the action. Some signed authority redeems do not require tapping by the submitter because the authority signature is the authorization.
 
-**External:**
+All ticker comparisons are case insensitive. Indexers store and compare TAP tickers in lowercase. Tickers are Unicode visible length strings. Before block `861576`, valid token tickers are 3 visible characters or 5 to 32 visible characters. From block `861576`, valid token tickers are 1 to 32 visible characters.
 
-To get connected to TAP, marketplaces/wallets clone their existing BRC-20 infrastructure. Then either TAP's internal functions (see below) have to be implemented or endpoints that implement those have to be used to verify all balances (balance, available, transferable). From there on out, TAP tokens can be traded like regular BRC-20 tokens on their platforms. [updated Aug. 13th, 2023]
+## Activation Heights
 
-**Internal:**
+Mainnet activation heights used by the current upgrade implementation are:
 
-Users benefit from features such as token staking and swaps. Mass-sending of tokens are already available. The community will decide through the use of $TRAC (BRC-20) which features will be added or updated.
+| Feature | Height |
+| --- | ---: |
+| TAP index start | `779832` |
+| TAP protocol start | `801993` |
+| Jubilee handling | `824544` |
+| DMT support | `817705` |
+| Privilege authorities | `841682` |
+| Full ticker length range | `861576` |
+| Value stringify gate | `885588` |
+| DMT NAT miner rewards | `885588` |
+| Token authority whitelist fix | `916233` |
+| Token locks, delegated locks, staking, and sales | `999999999` pending mainnet activation review |
+| Miner reward shield | `941848` |
+| Miner reward transfer execution shield | `942002` |
 
-Alongside the specs, there is already TAP protocol tracking available on https://trac.network. 
+Non-mainnet indexers in the upgrade implementation activate feature gates at height `0` unless configured otherwise. Mainnet activation heights are part of consensus for production indexers.
 
-Trac's public endpoint (https://github.com/BennyTheDev/trac-tap-public-endpoint) allows developers to embrace the new standard. After the official release of Trac, developers may self-host TAP tracking and create their own endpoints.
+From the value stringify gate, `max`, `lim`, and `amt` values must not be JSON numbers. They must be encoded as strings. The same rule is rechecked for action amounts that are produced from delegated templates.
 
-Protocol updates will be announced in advance - with a reasonable grace-period - to allow indexers to follow. [added Aug. 13th, 2023]
+## Amounts
 
-# External
+Amounts are parsed against the token deployment decimals and stored in atomic units.
 
-As mentioned above, TAP tokens work in the exact same way as BRC-20 tokens. There are however a couple of minor modifications required for indexers:
-
-|| TAP | BRC-20 |
-|-------------| ------------- | ------------- |
-| Allowed ticker lengths | 3 and 5 to 32 symbols (Unicode) - 1 to 32 symbols from block 861,576  | 4-5 letters |
-| Protocol | tap  | brc-20  |
-| Deploy op | token-deploy  | deploy  |
-| Mint op | token-mint  | mint  |
-| Transfer op | token-transfer  | transfer  |
-
-#### Ord Wallet Versioning
-
-The TAP Protocol follows a defined upgrade path for indexers to support and benefit from ord wallet updates. Ord wallet upgrades are followed conservatively.
-This means that the protocol won't support every single release of the ord wallet but only important and beneficial updates. 
-Supported updates will be tested and announced in advance, with a reasonable time to allow indexers to be prepared.
-
-Indexers must make sure to follow the ord wallet versions and activation heights as of the table below:
-
-| Ord Client | Block Activation Height |
-|------------- | ------------- |
-| 0.14.1 | 779832 |
-| 0.19.1 | 779832 |
-| 0.20.0 | 779832 |
-| 0.22.2 | 779832 |
-| 1.0 | TBA |
-
-#### The Jubilee
-
-From block 824544 onwards, no new cursed inscriptions may be inscribed any longer. Before this block, indexers have to support tokens that are deployed and minted as cursed inscriptions.
-
-For external functions this means:
-
-- Until block 824543, cursed inscriptions using token-deploy, token-mint and token-transfer must be addressed without dash in the ticker. Indexers must internally prefix those with a dash to separate them from their non-cursed counterparts.
-- From block 824544 onwwards, no cursed tokens may be deployed or minted any longer. Tickers in token-transfer must be prefixed with a dash for cursed tokens.
-- Transferable inscriptions are not affected and can be sent to a recipient at any time.
-- Generally, no tokens can be deployed with a leading dash in token-deploy. Those would be invalid and rejected from being indexed.
-
-#### Examples
-
-```javascript
-{ 
+```json
+{
   "p": "tap",
   "op": "token-deploy",
   "tick": "tap",
   "max": "21000000",
-  "lim": "1000"
+  "lim": "1000",
+  "dec": "18"
 }
 ```
 
-```javascript
-{ 
+`dec` is optional for `token-deploy`. If omitted, it defaults to `18`. In the current reference behavior, an indexed decimal override must parse to an integer from `0` to `17`. Values outside the override range are not used and the default `18` remains. DMT deployments use `0` decimals.
+
+`lim` is optional. If omitted, minting has no per mint limit beyond the remaining supply.
+
+## External Token Operations
+
+### token-deploy
+
+Deploys a TAP token.
+
+```json
+{
+  "p": "tap",
+  "op": "token-deploy",
+  "tick": "tap",
+  "max": "21000000",
+  "lim": "1000",
+  "dec": "18"
+}
+```
+
+Rules:
+
+- `tick`, `max`, and `op` are required.
+- `max` must resolve to a positive atomic amount not larger than `18446744073709551615` whole tokens at the token decimals.
+- `lim`, if present, must resolve to a positive atomic amount within the same maximum.
+- A ticker can only be deployed once in its normalized form.
+- A deployment can carry optional `dta` metadata with a string value up to 512 bytes.
+- A deployment can carry `prv` to bind minting to a privilege authority.
+
+### token-mint
+
+Mints an already deployed token.
+
+```json
+{
   "p": "tap",
   "op": "token-mint",
   "tick": "tap",
@@ -85,8 +96,20 @@ For external functions this means:
 }
 ```
 
-```javascript
-{ 
+Rules:
+
+- `tick` and `amt` are required.
+- `amt` must resolve to a positive atomic amount.
+- The mint must not exceed the deployment supply or the mint limit.
+- If the deployment has a privilege authority, the mint must include a valid `prv` object signed by that authority.
+- A mint can carry optional `dta` metadata with a string value up to 512 bytes.
+
+### token-transfer
+
+Creates a transferable inscription.
+
+```json
+{
   "p": "tap",
   "op": "token-transfer",
   "tick": "tap",
@@ -94,593 +117,1213 @@ For external functions this means:
 }
 ```
 
-# Internal
+Rules:
+
+- `tick` and `amt` are required.
+- `amt` must resolve to a positive atomic amount.
+- The owner must have enough available balance when the transfer inscription is created.
+- Available balance is `balance - transferable - locked`.
+- A transfer can carry optional `dta` metadata with a string value up to 512 bytes.
+
+## Jubilee Rules
+
+From block `824544`, new cursed inscriptions are no longer accepted.
+
+Before block `824544`, cursed `token-deploy`, `token-mint`, and `token-transfer` inscriptions are addressed without a dash in the inscription. Indexers internally prefix those tickers with `-` to separate them from their non-cursed counterpart.
+
+From block `824544`, transfer inscriptions for cursed tokens must use the dashed ticker. Deployments with a leading dash are invalid.
+
+## Internal Account Operations
+
+Internal operations update account state after tapping. They do not require a separate transferable inscription per recipient.
 
 ### block-transferables
 
-To prevent grief attacks using the external "token-transfer", account holders can entirely disable this function by inscribing the inscription text below to themselves and tap (=send to yourself) the inscription. 
-This feature is especially important if token-authorities are being used that redeem tokens from their own accounts, as those "token-auth" as internal function.
+Blocks future incoming transferable inscriptions for an account.
 
-Once tapped (=inscribed and again sent to yourself), incoming inscribe transfers must be skipped/invalidated such that no subsequent transfers using "token-transfer" aren't possible anymore. 
-Existing transferables stay intact and can be used.
-
-#### Example
-
-```javascript
+```json
 {
-  "p" : "tap",
-  "op" : "block-transferables"
+  "p": "tap",
+  "op": "block-transferables"
 }
 ```
 
+This protects accounts that rely on authority balances or signed actions. Existing transferables remain valid.
+
 ### unblock-transferables
 
-To unblock inscribe transfers, the function below must be tapped (=inscribed and again sent to yourself).
-Once tapped, inscribe transfers will continue to work normally and contribute to the overall transferable amounts of the account again.
+Re-enables incoming transferable inscriptions for an account.
 
-#### Example
-
-```javascript
+```json
 {
-  "p" : "tap",
-  "op" : "unblock-transferables"
+  "p": "tap",
+  "op": "unblock-transferables"
 }
 ```
 
 ### token-send
 
-Enables mass-transfer of different tokens to many recipients.
+Sends one or more token amounts from the tapped account.
 
-There will be more internal functions, so it may be useful to check back here once in a while.
-
-The specs for "token-send" are defined as follows:
-
-- Users inscribe a "token-send" inscription to their Bitcoin address.
-- After the transaction confirmed, the inscription has to be resent to the same address for confirmation (tapping).
-- Upon tapping, the Bitcoin address must own the the amounts of tokens that are given with the inscription.
-- Only if the "token-send" inscription is tapped, sending tokens will be performed.
-- The receiver addresses must be carefully validated: must be valid Bitcoin addresses, must be trimmed, addresses starting with bc1 have to be lowercased.
-- "token-send" is atomic upon inscribing (before tapping): all amounts, tickers and addresses must be syntactically valid.
-- Upon tapping, invalid and semantically incorrect token sends must be skipped (e.g. insufficient funds, invalid amounts or invalid data types).
-- Each successful token send must credit the given amounts to recipient and be removed from the sender's balance.
-- Each send item must exclusively operate on available balances, not overall balances (available = balance - transferable). [added Aug. 8th, 2023]
-
-#### Example
-
-The below example will send 1000 tap tokens to each address. Tokens and amounts can be mixed.
-There is no restriction on the amount of items (receivers).
-
-```javascript
+```json
 {
-  "p" : "tap",
-  "op" : "token-send",
-  "items" : [
-     {
-      "tick": "-tap",
-      "amt": "10000",
-      "address" : "bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20"
-     },
-     {
+  "p": "tap",
+  "op": "token-send",
+  "items": [
+    {
       "tick": "tap",
       "amt": "10000",
-      "address" : "bc1p063utyzvjuhkn0g06l5xq6e9nv6p4kjh5yxrwsr94de5zfhrj7csns0aj4"
-     }
+      "address": "bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20"
+    },
+    {
+      "tick": "edg",
+      "amt": "50",
+      "address": "bc1p063utyzvjuhkn0g06l5xq6e9nv6p4kjh5yxrwsr94de5zfhrj7csns0aj4"
+    }
   ]
 }
 ```
 
+Rules:
+
+- `items` must be a non-empty array.
+- Every item needs `tick`, `amt`, and `address`.
+- Addresses are trimmed. Valid `bc1` addresses are lowercased.
+- Each amount spends available balance only.
+- Each item can carry optional `dta` metadata with a string value up to 512 bytes.
+- Valid items credit receivers and debit the sender. Invalid semantic items are skipped.
+
 ### token-trade
 
-The internal function set "token-trade" consists of 3 functions to allow text-inscription based trading. By inscribing a trade inscription as seller, a trade is being added to the Ordinals collection and can be picked up by any buyer for the duration of a valid period in blocks. 
+`token-trade` is the original TAP token to token trade primitive. It is retained for direct TAP token trades.
 
-Upon filling a trade by the buyer, an optional fee receiver address may be added to receive fixed 0.3% fees in tokens per filled trade. Fees are applied on top of the purchased token and is being paid by the buyer. Fees give inscription services and marketplaces a way to benefit from internal trading, while buyers benefit from the convenience and guidance of their services.
+Create a trade:
 
-To inscribe a trade, a seller has to inscribe a text inscription in the following format:
-
-#### Creating a Trade
-
-```javascript
+```json
 {
-  "p" : "tap",
-  "op" : "token-trade",
-  "side" : "0",
-  "tick" : "tap",
-  "amt" : "1",
-  "accept" : [
+  "p": "tap",
+  "op": "token-trade",
+  "side": "0",
+  "tick": "tap",
+  "amt": "1",
+  "accept": [
     {
-      "tick" : "buidl",
-      "amt" : "0.1"
-    },
-    {
-      "tick" : "based",
-      "amt" : "0.2"
+      "tick": "edg",
+      "amt": "0.1"
     }
   ],
-  "valid" : "900000"
+  "valid": "900000"
 }
 ```
 
-As soon as the inscription above is inscribed, the trade is open and ready to be filled under the following conditions:
+Fill a trade:
 
-- All attributes are mandatory as of the example above.
-- Side = 0 specifies that this is a trade function by a seller.
-- The seller must own the offered token amount in the moment of filling the trade by a buyer.
-- The offered token amount must be deducted from the available balances, not overall balances (available = balance - transferable).
-- The tokens defined in the "accept" attribute represent accepted tokens for the trade.
-- If any of the accepted tokens are being used by the buyer, the trade concludes. 
-- The tokens defined in the "accept" attribute must be deployed in the moment of filling the trade by a buyer.
-- The block specified in the "valid" attribute must be a future block (inclusive).
-- The trade is invalid and not being indexed if the current block is larger than "valid".
-- Up to block 824543 and if the offered token is cursed, then the inscription has to be inscribed as cursed.
-- Ticks within the "accept" attribute must be unique. Only the first must be indexed if there is more than one of the same.
-- Cursed tokens defined in the "accept" attribute have to be prefixed with a dash (this is to allow mixed cursed/non-cursed trading).
-- From block 824544 onwards, the offered token ticker has to be prefixed with a dash, if it originally has been deployed as cursed token.
-- After inscribing the function, sellers have to send the inscription to themselves to approve (tapping).
-
-#### Cancel a Trade
-
-In order to cancel an existing, non-expired trade. The following function has to be inscribed and tapped:
-
-```javascript
+```json
 {
-  "p" : "tap",
-  "op" : "token-trade",
-  "side" : "0",
-  "trade" : "<inscription id>"
+  "p": "tap",
+  "op": "token-trade",
+  "side": "1",
+  "trade": "<inscription id>",
+  "tick": "edg",
+  "amt": "0.1",
+  "fee_rcv": "<fee receiver address>"
 }
 ```
 
-- All attributes are mandatory as of the example above.
-- Side = 0 specifies that this is a trade function by a seller.
-- The "trade" attribute has to be populated with the inscription id (_not_ number) of the referenced trade inscription above.
-- The trade will only cancel if the referenced trade inscription is owned by wallet address that intends to cancel.
-- After a trade has been cancelled, no trades for it can occur.
-- After inscribing the function, sellers have to send the inscription to themselves to approve (tapping).
+Cancel a trade:
 
-#### Fill a Trade
-
-Valid trades are fillable by inscribing a token-trade inscription that specifies which offered token to purchase, with a reference to the original trade inscription. Additionally, an optional fee receiver may be specified. The fee receiver will earn fixed 0.3% of the token that the buyer is purchasing. The fee is applied on top of the purchase amount.
-
-```javascript
+```json
 {
-  "p" : "tap",
-  "op" : "token-trade",
-  "side" : "1",
-  "trade" : "<inscription id>",
-  "tick" : "based",
-  "amt" : "0.2",
-  "fee_rcv" : "<fee receiver address>"
+  "p": "tap",
+  "op": "token-trade",
+  "side": "0",
+  "trade": "<inscription id>"
 }
 ```
 
-- Except "fee_rcv", all attributes are mandatory as of the example above.
-- Side = 1 specifies that this is a trade function by a buyer.
-- The "trade" attribute must match the original trade inscription id (_not_ number).
-- The "tick" and "amt" attributes must exactly match one of the accepted tokens from the referenced trade inscription.
-- The buyer must _not_ fill all accepted tokens as of the referenced trade but exactly one.
-- The ticker must be deployed in order to get the above indexed.
-- The buyer must own the specified token and it's amount + 0.3% trading fees if the "fee_rcv" attribute is set.
-- If the "fee_rcv" attribute is set, it must be a valid Bitcoin address.
-- Upon indexing, the Bitcoin address in "fee_rcv" must be trimmed and lowercased if the address starts with "bc1".
-- Up to block 824543 and if the offered token is cursed, then the inscription has to be inscribed as cursed.
-- From block 824544 onwards, the "tick" attribute has to be prefixed with a dash, if it originally has been deployed as cursed token.
-- After inscribing the function, buyers have to send the inscription to themselves to approve (tapping).
-- If the current block upon tapping is larger than the block in the "valid" attribute as of the referenced trade, filling will fail.
-- If all conditions are met, the token and its exact amount is being sent to the seller and the offered token is being sent to the buyer. If fees apply, the fee will be sent to the fee receiver.
-- Fees are only applicable on amounts and decimals that allow 0.3% to be applied. This means there may be zero fees if not applicable.
-- A trade has been filled successfully from an indexer point of view, if all conditions are met and all balances are credited correctly.
+Rules:
 
-### token-auth
+- `side: "0"` creates or cancels from the seller side.
+- `side: "1"` fills from the buyer side.
+- A fill must match one accepted ticker and amount exactly.
+- The seller and buyer must both have sufficient available balances at fill time.
+- `valid` is a block height. A trade cannot be filled after that height.
+- `fee_rcv`, if provided, receives the fixed trade fee according to the indexed rule set.
+- Trades require tapping by the account that creates, fills, or cancels them.
 
-The internal function set "token-auth" allows 3rd parties (authorities) to independently issue signed redeem inscriptions. These signed redeem inscriptions may be inscribed by anyone and authorized tokens being sent to recipients. This allows for custom logic to be specified about what tokens should go where and when. 
+## token-auth
 
-This makes TAP basically a no-knowledge protocol within Ordinals as it doesn't need to know the details of custom logic provided by 3rd parties. Unlike zk-rollups, token-auth relies solely on message signatures and does not require sequencers or L2 mediators. Token-auth can even be used to connect with zk-rollup solutions, adding an extra layer of authenticity.
+`token-auth` lets an account create an authority and later execute signed redeems. It is the base primitive for applications that need offchain policy decisions with onchain settlement.
 
-token-auth does not rely on witness data hacking. All operations are clearly contained within the Ordinal envelope's data and thus easily provable by any indexer or individual.
+An authority is identified by the inscription id of the tapped `token-auth` creation inscription.
 
-Typical use-cases for token-auth are gamification (e.g. convert points to tokens), token bridges, staking, reward systems, cross-chain marketplaces and more.
+### Create an Authority
 
-#### Create an authority
-
-To create an authority, a special token-auth inscription must be sent and tapped with an address that holds authorized tokens.
-
-Manual creation of token-auth code is not recommended as it requires message signatures. See the boilerplate (https://github.com/Trac-Systems/tap-protocol-token-auth-boilerplate) that helps to generate signed token auths. Token-auth uses secp256k1 signatures. See https://github.com/paulmillr/noble-secp256k1 as an example implementation.
-
-Example:
-
-```javascript
+```json
 {
-   "p":"tap",
-   "op":"token-auth",
-   "sig":{
-      "v":"0",
-      "r":"51143521410606380758535576062355234772504706283689533465002520447203156100709",
-      "s":"23524754809729078525228087002160468580495709275023865450917881139756565577560"
-   },
-   "hash":"0f30c22be2f46e819538ca1281aadb82d3928cae5a699cade80013c5b14871e4",
-   "salt":"0.25991027744263695",
-   "auth":[
-      "gib"
-   ]
+  "p": "tap",
+  "op": "token-auth",
+  "sig": {
+    "v": "0",
+    "r": "51143521410606380758535576062355234772504706283689533465002520447203156100709",
+    "s": "23524754809729078525228087002160468580495709275023865450917881139756565577560"
+  },
+  "hash": "0f30c22be2f46e819538ca1281aadb82d3928cae5a699cade80013c5b14871e4",
+  "salt": "0.25991027744263695",
+  "auth": [
+    "tap"
+  ]
 }
 ```
 
-- The "auth" attribute must contain an array of deployed TAP protocol tokens that are verified for the authority's account.
-- If the "auth" attribute's array is empty, all tokens owned by the authority's account are authorized [added Sep. 25th, 2023]
-- Upon indexing, the token-auth inscription must be verified against the signature ("sig"), "hash" attribute and public key.
-- - The public key must be recovered by using "hash".
-  - To prevent hash collisions, a custom "salt" value has to be provided by the authority.
-  - To verify, the "auth" array must be JSON-stringified and sha256-hashed with "salt" (sha256(auth + salt)).
-  - "hash" must be unique and can only be used once across the entire indexing state.
-  - Token-auth is atomic, this means that all tokens in "auth" must be deployed at the time of inscribing (if the "auth" array is _not_ empty).
-  - The authority address does NOT need to own the authorized tokens at the time of inscribing (but should, upon redeeming, see below).
-  - If all authorized tokens are deployed or the "auth" array is empty, the hashed signature is valid and the hash has never been used before, the token-auth inscription must be indexed after tapping (=sending to "yourself"). 
+Rules:
 
-#### Create a redeem
+- `auth` must be an array.
+- If `auth` is empty, the authority can operate on any deployed token held by the authority account.
+- If `auth` is not empty, every listed ticker must be deployed.
+- The inscription must be tapped by the authority account.
+- The signature is secp256k1.
+- The signed message is `sha256(JSON.stringify(auth) + salt)`.
+- `hash` is used for public key recovery.
+- A compact signature can only be used once.
 
-Tokens to redeem are signed and issued by the authority. The inscription code may be inscribed by everyone and it is under the sole discretion of the authority when and how redeems are issued. Typically, an authority would sign and issue a redeem when all its conditions are met.
+### Cancel an Authority
 
-Manual creation of token-auth code is not recommended as it requires message signatures. See this example script that helps to generate signed token auths. Token-auth uses secp256k1 signatures. See https://github.com/paulmillr/noble-secp256k1 as an example implementation.
-
-```javascript
+```json
 {
-   "p":"tap",
-   "op":"token-auth",
-   "sig":{
-      "v":"1",
-      "r":"113472523327934685528808901641630457916054343054143422440331961430719594721038",
-      "s":"21393407019197854961723689634443789868582208930187383447036700552814535514199"
-   },
-   "hash":"82e2b0d098dcdab820ff866b011250af8841a6b59cedd7164bb94b63d2598de9",
-   "salt":"0.46074583388095514",
-   "redeem":{
-      "items":[
-         {
-            "tick":"gib",
-            "amt":"546",
-            "address":"bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20"
-         }
-      ],
-      "auth":"fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0",
-      "data":""
-   }
+  "p": "tap",
+  "op": "token-auth",
+  "cancel": "<authority inscription id>"
 }
 ```
 
-- The "redeem" attribute must contain an object consisting of "redeem" => "items", the inscription id of the signing authority ("redeem" => ""auth") and "redeem" => "data".
-- Upon indexing, the token-auth inscription must be verified against the signature ("sig"), "hash" attribute and public key.
-- - The public key must be recovered by using "hash".
-  - To prevent hash collisions, a custom "salt" value has to be provided by the authority.
-  - To verify, the "auth" array must be JSON-stringified and sha256-hashed with "salt" (sha256(auth + salt)).
-  - "hash" must be unique and can only be used once across the entire indexing state.
-  - "redeem" => "data" must be present but may be empty.
-  - Based on the inscription id in "auth", the public key by the authority must be recovered and compared with the public key of the redeem.
-  - - Both public keys must match.
-    - Both hashes must be valid.
-    - The original auth inscription mustn't be cancelled.
-    - All tickers in "redeem" => "items" must be specified in the original "auth" inscription.
-- If all conditions are met, the tokens specified in "redeem" => "items" must be sent exactly like TAP's function "token-send" above, including all of its conditions. Tapping is not required, as this is a signed transaction and may be inscribed by everyone.
+Rules:
 
-#### Cancel an authority
+- The cancel inscription must be tapped by the authority account.
+- The referenced authority must exist and must not already be cancelled.
+- Cancellation retires the authority for new obligations. It must not revoke settlement paths for obligations that already exist.
+- After cancellation, new direct redeem items are invalid.
+- After cancellation, new obligation creating actions are invalid. This includes `lock`, `execute`, `auth-cfg`, `stake`, `fund-sale`, and `contribute`.
+- After cancellation, settlement and exit actions remain valid when their own conditions are met. This includes `claim`, `refund`, `claim-rwd`, `unstake`, `finalize-sale`, `claim-sale`, `refund-sale`, eligible `withdraw-sale`, and `cancel-delegation`.
+- Existing locks, stake positions, sale contributions, sale inventories, and authority balances are not removed by cancellation.
+- Existing consumed locks are not changed by cancellation.
 
-To cancel a "token-auth", the authority must send an inscription like below to its associated address and tap.
+This distinction is required for user safety. Once an authority has created a lock or accepted a user position, cancellation must not let the operator block claims, refunds, unstaking, reward claims, sale claims, or sale refunds.
 
-```javascript
+### Redeem Items
+
+Redeem items are signed by the authority and can be inscribed by anyone.
+
+```json
 {
-   "p":"tap",
-   "op":"token-auth",
-   "cancel" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
+  "p": "tap",
+  "op": "token-auth",
+  "sig": {
+    "v": "1",
+    "r": "113472523327934685528808901641630457916054343054143422440331961430719594721038",
+    "s": "21393407019197854961723689634443789868582208930187383447036700552814535514199"
+  },
+  "hash": "82e2b0d098dcdab820ff866b011250af8841a6b59cedd7164bb94b63d2598de9",
+  "salt": "0.46074583388095514",
+  "redeem": {
+    "auth": "<authority inscription id>",
+    "items": [
+      {
+        "tick": "tap",
+        "amt": "546",
+        "address": "bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20"
+      }
+    ],
+    "data": ""
+  }
 }
 ```
 
-- "cancel" must point to an existing an non-cancelled "token-auth" of the authority.
-- Once tapped, no further redeems may be executed on the inscribed "token-auth", indefinitely.
+Rules:
 
-### privilege-auth
+- `redeem.data` must be present.
+- The signed message is `sha256(JSON.stringify(redeem) + salt)`.
+- The redeem public key must match the authority creation public key.
+- The compact redeem signature can only be used once.
+- If the authority `auth` list is not empty, every item ticker must be in that list.
+- Redeem items are processed like `token-send` from the authority account.
+- Redeem items do not require tapping by the submitter.
 
-The internal function set "privilege-auth" allows 3rd parties (authorities) to implement token/unat/collectible whitelists, launchpads and general-purpose provenance for file hashes (sha256). 
+## Redeem Actions
 
-Privilege authorities will be available from activation block height 841682.
+Redeems can carry an `actions` array instead of, or alongside, `items`. Actions are authority signed operations that can lock tokens, release locks, configure authority pools, manage staking positions, and run sale flows.
 
-#### Create an privilege authority
-
-To create a privilege authority, a special privilege-auth inscription must be sent and tapped.
-
-Manual creation of privilege-auth code is not recommended as it requires message signatures. See the boilerplate (https://github.com/Trac-Systems/tap-protocol-privilege-auth-boilerplate) that helps to generate signed privileges. Privilege-auth uses secp256k1 signatures. See https://github.com/paulmillr/noble-secp256k1 as an example implementation.
-
-Example:
-
-```javascript
+```json
 {
-   "p":"tap",
-   "op":"privilege-auth",
-   "sig":{
-      "v":"0",
-      "r":"86508516128453602592995353796555408942165629541645840597158531627249758208446",
-      "s":"34207792571992691071321015990261453361621215423082720220623653945331263914520"
-   },
-   "hash":"a7a8fe6a46d7dd3aac3518ecdc97577be5319eb5ae8588eee9c92ad96eed3b68",
-   "salt":"0.41631368860188056",
-   "auth":{
-      "name":"Some privilege authority"
-   }
+  "p": "tap",
+  "op": "token-auth",
+  "sig": {
+    "v": "1",
+    "r": "...",
+    "s": "..."
+  },
+  "hash": "...",
+  "salt": "...",
+  "redeem": {
+    "auth": "<authority inscription id>",
+    "actions": [
+      {
+        "op": "lock",
+        "kind": "htlc",
+        "tick": "tap",
+        "amt": "10",
+        "claim": "bc1p...",
+        "refund": "bc1p...",
+        "condition": {
+          "type": "hashlock",
+          "hash": "<sha256 hex>"
+        },
+        "refund_after": "950000"
+      }
+    ],
+    "data": {}
+  }
 }
 ```
 
-#### Token deployments
+General action rules:
 
-Token deployments work exactly like regular deployments as described further above but a new attribute called "prv" must be added, pointing to an existing, active (not cancelled) token authority by using its inscription id (not number).
+- `actions` must be a non-empty array.
+- Each action has an `op` string.
+- Each token amount spends available balance only.
+- Available balance is `balance - transferable - locked`.
+- Lock creation records the full committed amount.
+- Claiming a lock sends the main amount to `claim` and sends allocations to their targets.
+- Refunding a lock sends the full committed amount, including allocations, to `refund`.
+- An action redeem that spends a token must satisfy the authority ticker whitelist if the authority has one.
+- Authority cancellation only blocks new obligations. It must not block settlement or exits for previously created obligations.
 
-If there is no valid authority at the given inscription id for "prv", the deployment will fail. If the authority is valid, only the authority specified in "prv" will be allowed to specify what address is allowed to mint tokens.
+### Action Matrix
 
-The authority still has to respect all given rules as of the deployment inscription. It cannot override limits, max supply, tickers.
+| `op` | Shape | Main invariant | What it enables |
+| --- | --- | --- | --- |
+| `lock` | `{ op, kind, tick, amt, claim, condition, refund?, refund_after?, data?, al? }` | Owner must have available balance for `amt + allocations`. Kind specific fields must match the invariant table below. | HTLC swaps, timed releases, escrow, OTC settlement, fee and reward routing. |
+| `execute` | `{ op, delegation, fill, final? }` | Delegation must be signed by the authority threshold, unused, unexpired, and must materialize exactly one valid `lock`. | Maker signed offers, PSBT style partial authorization, taker final fill without maker returning online. |
+| `cancel-delegation` | `{ op, auth?, nonce }` | Redeem authority must match the cancelled authority, and the nonce must be unused and uncancelled. | Cancels signed offers that were not executed. |
+| `claim` | `{ op, lock, preimage? }` | Lock must exist, must not be consumed, and the condition must be satisfied before refund is available for hashlocks. | Releases locked tokens to the claim target. |
+| `refund` | `{ op, lock }` | Lock must exist, must not be consumed, and current block must be at least `refund_after`. | Returns locked funds to the refund address. |
+| `auth-cfg` with `k: "stk"` | `{ op, k, stk, rt, ctl, r, n? }` | Controller must be the current authority, stake token must exist, reward tokens must exist unless `rt` is empty, tiers must be unique and weighted. | Staking pools with weighted tiers and reward accounting. |
+| `stake` | `{ op, auth, tick, amt, tier, claim }` | Staking authority must exist, `tick` must equal its stake token, tier must exist, staker must have available balance. | Opens an independent stake position. |
+| `claim-rwd` | `{ op, auth, pos, rt }` | Position must be open, belong to `auth`, and have positive pending reward for `rt`. | Claims accrued staking rewards without unstaking. |
+| `unstake` | `{ op, auth, pos, rt? }` | Position must be open, belong to `auth`, and current block must be at least its unlock height. | Returns staked principal after the lock duration. |
+| `auth-cfg` with `k: "sale"` | `{ op, k, st, pt, ctl, tre, s, n? }` | Sale and payment tokens must exist, treasury target must be valid, height and cap rules must be coherent. | Launchpads, capped sales, allowlisted sales, refund based funding. |
+| `fund-sale` | `{ op, auth, tick, amt }` | Sale authority must exist, `tick` must equal the sale token, controller must have available balance. | Deposits sale inventory. |
+| `contribute` | `{ op, auth, tick, amt, claim, alw? }` | Sale must be open, `tick` must equal the payment token, caps and allowlist must pass, contributor must have available balance. | Records a buyer contribution and sale token allocation. |
+| `finalize-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize early only at hard cap, or after end when soft cap is met. | Sends payment pool to treasury and unlocks sale claims. |
+| `claim-sale` | `{ op, auth, cid }` | Contribution must be open, sale must be finalized, caller must be the contribution claim address. | Contributor claims allocated sale token. |
+| `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, or ended without meeting soft cap. Caller must be the contribution claim address. | Contributor gets payment token back. |
+| `cancel-sale` | `{ op, auth }` | Controller must match, sale must allow cancellation, and sale must not be finalized or already cancelled. | Cancels an open sale. |
+| `withdraw-sale` | `{ op, auth, tick, amt, tt, to }` | Controller must match. Withdrawal is allowed after finalization, cancellation, or failed end. Target must be valid. | Returns unsold inventory or moves remaining sale token balance. |
 
-Example for regular token deploys on the TAP Protocol:
+### Lock Action
 
-```javascript
-{ 
+```json
+{
+  "op": "lock",
+  "kind": "htlc",
+  "tick": "tap",
+  "amt": "10",
+  "claim": "bc1p...",
+  "refund": "bc1p...",
+  "condition": {
+    "type": "hashlock",
+    "hash": "<sha256 hex>"
+  },
+  "refund_after": "950000",
+  "data": {
+    "dom": "market",
+    "ref": "order-1"
+  },
+  "al": [
+    {
+      "tt": "a",
+      "to": "bc1p...",
+      "amt": "0.2",
+      "rl": "of"
+    }
+  ]
+}
+```
+
+Fields:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | Lock kind. Supported values are `htlc`, `vesting`, `cooldown`, `escrow`, and `otc`. |
+| `tick` | Token ticker. Stored lowercase. |
+| `amt` | Main amount locked for the claimant. |
+| `claim` | Bitcoin address that receives the main amount on claim. |
+| `refund` | Bitcoin address that receives the full committed amount on refund, when the kind uses refund. |
+| `condition` | Claim condition. Shape depends on `kind`. |
+| `refund_after` | Bitcoin block height from which refund is allowed, when the kind uses refund. |
+| `data` | Optional application data. Some kinds require `data.dom` and `data.ref`. |
+| `al` | Optional allocation list for fees, rewards, authority credits, or burn. |
+
+The legacy `fee` object is accepted as a shorthand for an account allocation with role `of`. New applications should use `al`.
+
+### Lock Kind Invariants
+
+| Kind | Condition invariant | Claim invariant | Refund invariant | Data invariant | What apps can build |
+| --- | --- | --- | --- | --- | --- |
+| `htlc` | `condition.type` must be `hashlock`, and `condition.hash` must be SHA-256 hex. | `claim` receives `amt` only when the preimage hashes to `condition.hash` and claim happens before `refund_after`. | `refund` receives `amt + allocations` from `refund_after` onward. | No required `data` fields. | Cross chain atomic swaps, marketplace fills, escrow with preimage release, pay for secret flows. |
+| `vesting` | `condition.type` must be `height`, and `condition.min` must be a valid block height. | `claim` receives `amt` once current block is at least `condition.min`. | No refund fields are allowed. | `data.dom` and `data.ref` are required strings. | Team vesting, grant unlocks, protocol emissions, scheduled payouts. |
+| `cooldown` | `condition.type` must be `height`, and `condition.min` must be a valid block height. | `claim` must equal the authority owner and can claim once current block is at least `condition.min`. | No refund fields are allowed. | `data.dom` and `data.ref` are required strings. | Withdrawal delays, unstaking cooldowns, anti-compromise waiting periods. |
+| `escrow` | `condition.type` must be `authority`, and `condition.auth` must be an active token authority. | `claim` receives `amt` only when the authority named in `condition.auth` executes the claim. | `refund` receives `amt + allocations` from `refund_after` onward. | `data.dom`, `data.ref`, `data.payer`, and `data.payee` are required. `payer` must equal the lock owner. `payee` must equal `claim`. | Service escrow, dispute mediated sales, authority approved settlement. |
+| `otc` | `condition.type` must be `hashlock` with a SHA-256 hash or `authority` with an active authority. | Claim follows either the hashlock rule or authority rule. | `refund` receives `amt + allocations` from `refund_after` onward. | `data.dom`, `data.ref`, and `data.cp` are required strings. | Bilateral OTC deals, private settlement tickets, negotiated fills with an explicit counterparty reference. |
+
+### Claim Action
+
+Claims consume a lock and credit its target.
+
+```json
+{
+  "op": "claim",
+  "lock": "<lock id>",
+  "preimage": "<preimage>"
+}
+```
+
+Rules:
+
+- A hashlock claim must provide a preimage whose SHA-256 hash matches the lock condition.
+- A hashlock claim must happen before `refund_after`.
+- A height claim can execute once the chain height is at least `condition.min`.
+- An authority claim can execute when the redeem authority equals `condition.auth`.
+- A lock can only be consumed once.
+
+### Refund Action
+
+Refunds consume a lock after its refund height.
+
+```json
+{
+  "op": "refund",
+  "lock": "<lock id>"
+}
+```
+
+Rules:
+
+- The lock must have a `refund` address.
+- The current block must be at least `refund_after`.
+- The full committed amount is returned to `refund`.
+- Refund availability does not expire.
+
+## Allocations
+
+Allocations split claim proceeds into additional targets.
+
+```json
+{
+  "al": [
+    {
+      "tt": "a",
+      "to": "bc1p...",
+      "amt": "0.2",
+      "rl": "of"
+    },
+    {
+      "tt": "h",
+      "to": "<authority id>",
+      "amt": "0.2",
+      "rl": "sr"
+    },
+    {
+      "tt": "b",
+      "to": "1BitcoinEaterAddressDontSendf59kuE",
+      "amt": "0.1",
+      "rl": "burn"
+    }
+  ]
+}
+```
+
+Rules:
+
+- `al` can contain up to 16 entries.
+- Every entry needs `tt`, `to`, `amt`, and `rl`.
+- `tt: "a"` sends to a Bitcoin account address.
+- `tt: "h"` sends to an authority balance.
+- `tt: "b"` burns to the canonical burn address `1BitcoinEaterAddressDontSendf59kuE`.
+- `rl` is a short role string matching `^[a-z0-9_-]{1,16}$`.
+- Roles must be unique inside one allocation list.
+- Amounts are parsed with the locked token decimals.
+- Allocation amounts are added on top of the main lock amount.
+- On refund, allocation amounts return to the refund address together with the main amount.
+- `rl: "sr"` on a target authority credits a staking reward accumulator if that authority is a staking authority.
+
+## Delegated Lock Execution
+
+Delegated execution lets an authority pre-sign a lock template. A later filler provides the final values, and anyone can inscribe the final action if the signatures and constraints pass.
+
+This is useful for marketplaces because the maker signs once, then the taker executes without requiring the maker to come back online.
+
+Authority setup:
+
+```text
+authority wallet
+  |
+  | inscribe token-auth with auth array
+  | tap to own address
+  v
+active token authority
+  |
+  | owns balances and signs later policy
+  v
+redeem items and redeem actions
+```
+
+Delegated execution with a maker and a taker:
+
+```text
+maker authority
+  |
+  | signs delegation:
+  | auth, nonce, expiry, threshold,
+  | signers, template, constraints
+  v
+signed delegation offer
+  |
+  | offchain discovery
+  v
+taker
+  |
+  | chooses fill values:
+  | claim, refund, hash, refund_after
+  | optionally gets finalizer signatures
+  v
+token-auth redeem with execute action
+  |
+  | inscribed by taker or any broadcaster
+  v
+indexer
+  |
+  | verifies authority, signatures, constraints,
+  | nonce, expiry, whitelist, and available balance
+  v
+lock record
+```
+
+Delegation cancellation:
+
+```text
+authority wallet
+  |
+  | signs and taps normal redeem action
+  | { op: "cancel-delegation", nonce }
+  v
+delegation cancel record
+  |
+  | same auth + nonce can no longer execute
+  v
+stale offchain offer is unusable
+```
+
+Delegated-only redeem:
+
+```json
+{
+  "p": "tap",
+  "op": "token-auth",
+  "sig": {
+    "v": "1",
+    "r": "...",
+    "s": "..."
+  },
+  "hash": "...",
+  "salt": "...",
+  "redeem": {
+    "actions": [
+      {
+        "op": "execute",
+        "delegation": {
+          "auth": "<authority inscription id>",
+          "nonce": "order-1",
+          "expiry": "960000",
+          "threshold": 1,
+          "signers": [
+            "<compressed secp256k1 pubkey>"
+          ],
+          "template": {
+            "op": "lock",
+            "kind": "htlc",
+            "tick": "tap",
+            "amt": "10",
+            "claim": "$claim",
+            "refund": "$refund",
+            "condition": {
+              "type": "hashlock",
+              "hash": "$hash"
+            },
+            "refund_after": "$refund_after"
+          },
+          "constraints": {
+            "claim": {
+              "type": "btc-address"
+            },
+            "refund": {
+              "type": "btc-address"
+            },
+            "hash": {
+              "type": "sha256"
+            },
+            "refund_after": {
+              "type": "block-offset",
+              "base": "current",
+              "min": "24",
+              "max": "24"
+            }
+          },
+          "sigs": [
+            {
+              "hash": "...",
+              "sig": {
+                "v": "0",
+                "r": "...",
+                "s": "..."
+              }
+            }
+          ],
+          "salt": "..."
+        },
+        "fill": {
+          "claim": "bc1p...",
+          "refund": "bc1p...",
+          "hash": "<sha256 hex>",
+          "refund_after": "950000"
+        }
+      }
+    ],
+    "data": {}
+  }
+}
+```
+
+Rules:
+
+- Delegated-only redeems omit `redeem.auth`.
+- Every action in a delegated-only redeem must be `execute`.
+- The delegated authority is verified from `delegation.auth`.
+- `nonce` must match `^[A-Za-z0-9._:-]{1,128}$`.
+- A nonce can be executed once or cancelled once.
+- `expiry` is a block height. Execution fails after that height.
+- `signers` are compressed or uncompressed secp256k1 public keys. They are normalized to compressed keys.
+- At least one signer must be the authority public key.
+- `threshold` must be positive and cannot exceed 8 or the signer count.
+- The template must produce a `lock` action after placeholders are filled.
+- Constraints are checked against placeholders and direct paths.
+- If a placeholder is not constrained to an exact value, finalizer signatures are required after final fill activation.
+
+### Delegation Signature Thresholds
+
+Delegated execution uses threshold signatures over the delegation message.
+
+`threshold` is the required signature count. `signers` is the full signer set. A delegation with `threshold: 2` and three entries in `signers` is therefore a 2-of-3 authorization.
+
+The signed delegation message is:
+
+```text
+sha256(JSON.stringify([
+  "tap-delegated-lock-v2",
+  auth,
+  nonce,
+  expiry,
+  threshold,
+  signers,
+  template,
+  constraints,
+  finalizers
+]) + salt)
+```
+
+If `finalizers` is not present, the domain string is `tap-delegated-lock-v1` and the `finalizers` element is omitted.
+
+Validation rules:
+
+- `signers` must contain unique secp256k1 public keys.
+- Signer keys may be compressed or uncompressed. They are normalized to compressed keys before comparison.
+- The signer set cannot be empty and cannot contain more than 8 keys.
+- `threshold` is parsed as an integer and must be at least 1.
+- `threshold` cannot exceed the signer count and cannot exceed 8.
+- `sigs` may contain more entries than required, but only valid signatures from unique configured signers count.
+- At least one valid counted signature must be from the authority public key. This prevents a non-authority signer group from spending an authority delegation without the authority participating.
+- The delegation is still subject to nonce, expiry, ticker whitelist, template, constraint, finalizer, and balance checks. Signature threshold alone never makes an invalid action valid.
+
+Common patterns:
+
+| Pattern | Shape | Use |
+| --- | --- | --- |
+| 1-of-1 | `threshold: 1`, one signer, authority key included | Single authority signs an executable offer. |
+| 2-of-2 | `threshold: 2`, authority key and operator key | Authority and operator must both approve. Useful when an operator enforces fee or marketplace policy. |
+| 2-of-3 or higher | Multiple signers, threshold below signer count | Redundant operator or committee approval without requiring every signer to be online. |
+
+Supported constraint types:
+
+| Type | Rule |
+| --- | --- |
+| `btc-address` | Value must be a valid Bitcoin address. |
+| `sha256` | Value must be a valid SHA-256 hex string. |
+| `string` | Value must be a string. Optional `min` and `max` check string length. |
+| `number-string` | Value must be a decimal number string. |
+| `block-offset` | Value must be a block height. `base` must be `current`. At least one of `min` or `max` is required. Bounds are measured against the block that indexes the execution. |
+
+Constraints can also use exact matching:
+
+```json
+{
+  "claim": {
+    "equals": "bc1p..."
+  },
+  "tick": {
+    "allowed": [
+      "tap",
+      "edg"
+    ]
+  }
+}
+```
+
+### Final Action Signatures
+
+If `delegation.finalizers` is present, the final action must be signed by the configured finalizers. Finalizers use the same n-of-m threshold model as delegations, but they sign the filled action, not the original delegation template.
+
+```json
+{
+  "finalizers": {
+    "threshold": 1,
+    "signers": [
+      "<compressed secp256k1 pubkey>"
+    ]
+  }
+}
+```
+
+The execute action then includes:
+
+```json
+{
+  "final": {
+    "sigs": [
+      {
+        "hash": "...",
+        "sig": {
+          "v": "0",
+          "r": "...",
+          "s": "..."
+        }
+      }
+    ],
+    "salt": "..."
+  }
+}
+```
+
+Final signatures protect takers and operators when the maker template allows values that are not exact at maker signing time.
+
+The finalizer message is:
+
+```text
+sha256(JSON.stringify([
+  "tap-delegated-final-action-v1",
+  delegation_message,
+  finalizers.threshold,
+  finalizers.signers,
+  final_action
+]) + final.salt)
+```
+
+Finalizer validation counts unique valid signatures from `finalizers.signers`. The threshold must be at least 1, cannot exceed the finalizer signer count, and cannot exceed 8.
+
+### Cancel a Delegation
+
+```json
+{
+  "op": "cancel-delegation",
+  "auth": "<authority inscription id>",
+  "nonce": "order-1"
+}
+```
+
+Rules:
+
+- The action must be in a normal authority redeem.
+- The redeem authority must match `auth`.
+- The nonce must not already be used or cancelled.
+- Cancellation only affects unused delegated offers. It does not unlock funds because no lock exists before execution.
+
+## Staking Authority
+
+Staking is implemented as authority configuration plus stake, reward claim, and unstake actions. It is not a lock kind.
+
+Create a staking authority:
+
+```json
+{
+  "op": "auth-cfg",
+  "k": "stk",
+  "n": "Marketplace staking",
+  "stk": "tap",
+  "rt": [],
+  "ctl": {
+    "ty": "ta",
+    "auth": "<controller authority id>"
+  },
+  "r": {
+    "cm": "arps",
+    "rnd": "flr",
+    "aw": false,
+    "ep": "carry",
+    "ud": 0,
+    "tr": [
+      {
+        "id": "3m",
+        "dur": "12960",
+        "w": "1"
+      },
+      {
+        "id": "12m",
+        "dur": "51840",
+        "w": "4"
+      }
+    ]
+  }
+}
+```
+
+Fields:
+
+| Field | Meaning |
+| --- | --- |
+| `k` | Authority kind. `stk` means staking. |
+| `stk` | Token being staked. |
+| `rt` | Reward tickers. Empty array means rewards can be any token held by the authority. |
+| `ctl` | Controller. Current implementation uses `{ "ty": "ta", "auth": "<authority id>" }`. |
+| `r.cm` | Reward accounting mode. Current value is `arps`, accumulated reward per share. |
+| `r.rnd` | Rounding mode. Current value is `flr`, floor. |
+| `r.aw` | Auto withdraw. Current value is `false`. |
+| `r.ep` | Empty pool policy. Values are `reject`, `hold`, or `carry`. |
+| `r.tr` | Tiers. Each tier has `id`, block duration `dur`, and weight `w`. |
+| `r.ud` | Optional update delay. Current implementation stores it and defaults to `0`. |
+
+Empty pool policies:
+
+| Policy | Behavior |
+| --- | --- |
+| `reject` | Reward allocation to a staking authority with no shares is invalid. |
+| `hold` | Reward allocation with no shares is accepted and kept in the authority balance without distribution. |
+| `carry` | Reward allocation with no shares is carried and distributed when shares exist. Dust that cannot yet be distributed is also carried. |
+
+Stake:
+
+```json
+{
+  "op": "stake",
+  "auth": "<staking authority id>",
+  "tick": "tap",
+  "amt": "100",
+  "tier": "12m",
+  "claim": "bc1p..."
+}
+```
+
+Claim rewards:
+
+```json
+{
+  "op": "claim-rwd",
+  "auth": "<staking authority id>",
+  "pos": "<stake position id>",
+  "rt": "tap"
+}
+```
+
+Unstake:
+
+```json
+{
+  "op": "unstake",
+  "auth": "<staking authority id>",
+  "pos": "<stake position id>",
+  "rt": "tap"
+}
+```
+
+Rules:
+
+- A stake position is created from the staking inscription id and action index.
+- The staker spends available balance.
+- Shares are `staked atomic amount * tier weight`.
+- Each position has its own reward debt and unlock height.
+- Rewards can be claimed while the position is open.
+- Unstake is only valid at or after the position unlock height.
+- If `unstake.rt` is present, the implementation attempts to claim that reward ticker before returning the stake.
+
+Staking can support fee sharing, reward programs, vote escrow style weights, and loyalty systems. It is suitable when an application needs protocol indexed deposits and reward accounting without custody by the application server.
+
+## Sale Authority
+
+Sale authorities support token launch, capped sale, refund, and treasury flows.
+
+Create a sale authority:
+
+```json
+{
+  "op": "auth-cfg",
+  "k": "sale",
+  "n": "Example sale",
+  "st": "newtoken",
+  "pt": "tap",
+  "ctl": {
+    "ty": "ta",
+    "auth": "<controller authority id>"
+  },
+  "tre": {
+    "tt": "a",
+    "to": "bc1p..."
+  },
+  "s": {
+    "sh": "950000",
+    "eh": "960000",
+    "hc": "100000",
+    "sc": "1000",
+    "mn": "10",
+    "mx": "1000",
+    "r": {
+      "cm": "fix",
+      "pa": "1",
+      "sa": "100"
+    },
+    "ov": "reject",
+    "cx": true,
+    "alw": {
+      "ty": "sha256-merkle",
+      "lf": "addr",
+      "root": "<sha256 merkle root>"
+    }
+  }
+}
+```
+
+Fields:
+
+| Field | Meaning |
+| --- | --- |
+| `k` | Authority kind. `sale` means sale. |
+| `st` | Sale token distributed to contributors. |
+| `pt` | Payment token paid by contributors. |
+| `ctl` | Controller authority. |
+| `tre` | Treasury target for payment tokens. Target uses `tt` and `to`. |
+| `s.sh` | Start block height. |
+| `s.eh` | End block height. |
+| `s.hc` | Hard cap in payment token units. |
+| `s.sc` | Optional soft cap in payment token units. |
+| `s.mn` | Optional minimum contribution. |
+| `s.mx` | Optional maximum contribution per claim address. |
+| `s.r` | Fixed exchange rate. `cm` must be `fix`, `rnd` is stored as `flr`. |
+| `s.ov` | Overflow policy. Current value is `reject`. |
+| `s.cx` | If true, controller can cancel the sale. |
+| `s.alw` | Optional SHA-256 Merkle allowlist. |
+
+Sale actions:
+
+```json
+{ "op": "fund-sale", "auth": "<sale authority id>", "tick": "newtoken", "amt": "100000" }
+```
+
+```json
+{ "op": "contribute", "auth": "<sale authority id>", "tick": "tap", "amt": "50", "claim": "bc1p..." }
+```
+
+```json
+{ "op": "finalize-sale", "auth": "<sale authority id>" }
+```
+
+```json
+{ "op": "claim-sale", "auth": "<sale authority id>", "cid": "<contribution id>" }
+```
+
+```json
+{ "op": "refund-sale", "auth": "<sale authority id>", "cid": "<contribution id>" }
+```
+
+```json
+{ "op": "cancel-sale", "auth": "<sale authority id>" }
+```
+
+```json
+{
+  "op": "withdraw-sale",
+  "auth": "<sale authority id>",
+  "tick": "newtoken",
+  "amt": "1000",
+  "tt": "a",
+  "to": "bc1p..."
+}
+```
+
+Rules:
+
+- `fund-sale` deposits sale inventory into the sale authority.
+- `contribute` deposits payment tokens and records the contributor claim address.
+- Contributions are accepted only during the configured block window.
+- Contributions must satisfy caps, min and max values, and allowlist rules.
+- `finalize-sale` is valid before the end height only when the hard cap is reached. After the end height, it is valid when the soft cap is reached.
+- Finalization sends payment tokens to the treasury target.
+- `claim-sale` lets a contributor claim allocated sale tokens after finalization.
+- `refund-sale` lets a contributor recover payment tokens if the sale is cancelled or fails its soft cap after the end height.
+- `cancel-sale` is only valid when cancellation is enabled by `s.cx`.
+- `withdraw-sale` lets the controller withdraw remaining sale tokens after finalization, cancellation, or failed end.
+
+Sale authorities can support launchpads, token presales, fixed price allocations, allowlisted mints, and refund based funding rounds.
+
+## Authority Targets
+
+Several actions use compact target records:
+
+```json
+{
+  "tt": "a",
+  "to": "bc1p..."
+}
+```
+
+Target types:
+
+| `tt` | Target |
+| --- | --- |
+| `a` | Bitcoin account address. |
+| `h` | Token authority id. |
+| `b` | Burn address. |
+
+The Bitcoin burn address is `1BitcoinEaterAddressDontSendf59kuE`.
+
+## Lock and Authority Index Records
+
+Token locks are stored separately from transfer rows.
+
+Lock record:
+
+```json
+{
+  "id": "<lock id>",
+  "owner": "bc1p...",
+  "auth": "<authority id>",
+  "kind": "htlc",
+  "tick": "tap",
+  "amt": "10",
+  "remaining": "10",
+  "claim": "bc1p...",
+  "refund": "bc1p...",
+  "condition": {
+    "type": "hashlock",
+    "hash": "<sha256 hex>"
+  },
+  "refund_after": 950000,
+  "data": null,
+  "blck": 940000,
+  "tx": "<txid>",
+  "vo": 0,
+  "val": "546",
+  "ins": "<inscription id>",
+  "num": 123,
+  "ts": 1710000000
+}
+```
+
+Lock consume record:
+
+```json
+{
+  "lock": "<lock id>",
+  "action": "claim",
+  "kind": "htlc",
+  "owner": "bc1p...",
+  "target": "bc1p...",
+  "tick": "tap",
+  "amt": "10",
+  "blck": 940001,
+  "tx": "<txid>",
+  "vo": 0,
+  "val": "546",
+  "ins": "<inscription id>",
+  "num": 124,
+  "ts": 1710000600
+}
+```
+
+If allocations exist, lock and consume records also include:
+
+```json
+{
+  "al": [
+    {
+      "tt": "h",
+      "to": "<authority id>",
+      "amt": "1",
+      "rl": "sr"
+    }
+  ],
+  "total": "11"
+}
+```
+
+Staking authority, stake position, reward claim, sale status, sale contribution, sale claim, sale refund, sale cancel, and sale withdrawal records are protocol records. Implementations should expose them through their own APIs without changing the record meaning.
+
+## Example Applications
+
+| Application | Main actions and kinds | Required invariant support | Notes |
+| --- | --- | --- | --- |
+| Cross chain marketplace | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, `cancel-delegation`, allocations with `rl: "of"` and `rl: "sr"` | Delegated maker signatures, nonce uniqueness, hashlock preimage claims, refund height, fee and staking reward allocations. | Lets a maker sign once and a taker fill without the maker returning online. |
+| Direct atomic swap | `lock` with `kind: "htlc"`, `claim`, `refund` | Matching hashlocks, different refund windows, and one-time lock consumption. | Can be coordinated without a marketplace if both parties exchange lock data. |
+| OTC desk | `lock` with `kind: "otc"`, `claim`, `refund`, optional `execute` | Explicit counterparty reference in `data.cp`, hashlock or authority release, refund fallback. | Useful for negotiated bilateral trades that need a clear audit trail. |
+| Vesting dashboard | `lock` with `kind: "vesting"`, `claim` | Height based release and required `data.dom` plus `data.ref`. | Suitable for team allocations, grants, investor unlocks, or protocol emissions. |
+| Cooldown vault | `lock` with `kind: "cooldown"`, `claim` | Claim target must be the authority owner and no refund path is allowed. | Gives wallets or apps a protocol enforced waiting period before withdrawal. |
+| Service escrow | `lock` with `kind: "escrow"`, `claim`, `refund` | Authority controlled claim, payer and payee binding, refund fallback. | A mediator can approve release while the payer keeps refund protection. |
+| Staking rewards | `auth-cfg` with `k: "stk"`, `stake`, `claim-rwd`, `unstake`, allocations with `rl: "sr"` | Weighted tiers, per-position reward debt, reward tick rules, unlock height, empty pool policy. | Supports fee sharing, loyalty rewards, and long term holder programs. |
+| Token launchpad | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, sale state transitions. | Supports fixed rate sales with refunds if the round fails. |
+| Fee splitter | Allocations with target types `a`, `h`, and `b` | Allocation role uniqueness, target validation, refund returns all allocations to refund address. | Can route proceeds to operators, reward authorities, treasuries, or burn. |
+| Signed coupon or reward claim | Redeem `items` or `lock` with authority condition | Signature uniqueness, authority ownership, optional domain reference in `data`. | Useful for offchain games, reward systems, and bridge crediting. |
+
+## privilege-auth
+
+`privilege-auth` lets a project or authority sign mint permissions and content hash verifications.
+
+Create a privilege authority:
+
+```json
+{
+  "p": "tap",
+  "op": "privilege-auth",
+  "sig": {
+    "v": "0",
+    "r": "86508516128453602592995353796555408942165629541645840597158531627249758208446",
+    "s": "34207792571992691071321015990261453361621215423082720220623653945331263914520"
+  },
+  "hash": "a7a8fe6a46d7dd3aac3518ecdc97577be5319eb5ae8588eee9c92ad96eed3b68",
+  "salt": "0.41631368860188056",
+  "auth": {
+    "name": "Example authority"
+  }
+}
+```
+
+Use a privilege authority in a deployment:
+
+```json
+{
   "p": "tap",
   "op": "token-deploy",
   "tick": "tap",
   "max": "21000000",
   "lim": "1000",
-  "prv" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
+  "prv": "<privilege authority id>"
 }
 ```
 
-Example for DMT token deploys on the TAP Protocol:
+Use a privilege authority in a mint:
 
-```javascript
+```json
 {
-"p": "tap",
-"op": "dmt-deploy",
-"elem": "63b5bd2e28c043c4812981718e65d202ab8f68c0f6a1834d9ebea49d8fac7e62i0",
-"tick": "nat",
-"dt": "n",
-"prv" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
-}
-```
-
-#### Token mints
-
-Token mints work exactly like regular mints as described further above but a new attribute called "prv" must be provided.
-"prv" must contain an object specifying the authority's signature and the wallet address that is allowed to mint.
-"salt" can be used to pass extra data to make sure the resulting hash is always unique. 
-It is however recommended to use non-random salts (e.g. inscription ids) if the authority has the requirement internally to be able to re-index at all times.
-
-The authority must broadcast the signed inscription text via an offchain mechanism of its choice.
-
-The signature given with the "prv" attribute object must match the signature of the authority. Only if both resulting public keys match, the mint is valid.
-If the the resulting keys do not match, or the signature is invalid, the mint will be rejected.
-
-If any other address other than the one given tries to mint, the mint will fail and the authority has to re-issue a signed inscription with a new salt since hashes are unique across the protocol.
-
-Example mint inscription text on the TAP Protocol:
-
-```javascript
-{
-   "p":"tap",
-   "op":"token-mint",
-   "tick":"tap",
-   "amt":1000,
-   "prv":{
-      "sig":{
-         "v":"0",
-         "r":"106344897850645353394557411159466118155649878604746085611434406050662507764701",
-         "s":"5566788626956401066167017793946358967684734480695302740591785789681566880049"
-      },
-      "hash":"931c0b44c1811ba4a8ac7c696a7f0e664ea85b18c34ec32d492fcc99fd7ee4a7",
-      "address":"tb1pf9jluy2g797290uq5nutqm2yuynds6uf868ytc37nht53c5j8w3s7nfta7",
-      "salt":"0.3624804148476173"
-   }
-}
-```
-
-Example DMT mint inscription text on the TAP Protocol:
-
-```javascript
-{
-   "p":"tap",
-   "op":"dmt-mint",
-   "tick":"nat",
-   "blk":840000,
-   "dep":"825e287bb7dd163ed633110e31bc6abb6c80815ca68b7dd3cc71d729ecaaa3dci0",
-   "prv":{
-      "sig":{
-         "v":"0",
-         "r":"10387661166049122705773272120018537684460586485610280053381057207269720400370",
-         "s":"47937738938877326713978443360828324693873763102762802539146112797003515228281"
-      },
-      "hash":"1056344a88698e989aa6799c46d72f5b110fb26ff0426c1a84a6640803b0d74c",
-      "address":"tb1pf9jluy2g797290uq5nutqm2yuynds6uf868ytc37nht53c5j8w3s7nfta7",
-      "salt":"0.3903927009829504"
-   }
-}
-```
-
-#### DTA Field
-
-To allow for passing data to sub-indexers and smart contracts (co-processing), several functions allow for the use of a "dta" field.
-This dta field must be indexed for the following functions and rules:
-
-- Supported functions: token-deploy, token-mint, token-transfer, dmt-deploy, dmt-mint, token-auth (redeem), token-send.
-- The dta field is optional.
-- The dta field's data type must be a string.
-- The dta field's max size must be 512 bytes.
-- Invalid data type and max size lead to invalid function calls and the index must be skipped for those.
-- The dta field must be set as attribute of the items collection for functions token-auth (redeem) and token-send.
-- The dta field must also be processed for authorized mints by priv-auth.
-
-NOTE: for dmt-mint and dmt-deploy functions, see the DMT specs as linked below.
-
-Examples:
-
-```javascript
-{ 
-  "p": "tap",
-  "op": "token-deploy",
-  "tick": "tap",
-  "max": "21000000",
-  "lim": "1000",
-  "dta" : "some data"
-}
-```
-
-```javascript
-{ 
   "p": "tap",
   "op": "token-mint",
   "tick": "tap",
   "amt": "1000",
-  "dta" : "some data"
+  "prv": {
+    "sig": {
+      "v": "0",
+      "r": "...",
+      "s": "..."
+    },
+    "hash": "...",
+    "address": "bc1p...",
+    "salt": "..."
+  }
 }
 ```
 
-```javascript
-{ 
+Verify a content hash:
+
+```json
+{
   "p": "tap",
-  "op": "token-transfer",
-  "tick": "tap",
-  "amt": "100",
-  "dta" : "some data"
+  "op": "privilege-auth",
+  "sig": {
+    "v": "0",
+    "r": "...",
+    "s": "..."
+  },
+  "hash": "...",
+  "address": "bc1p...",
+  "salt": "...",
+  "prv": "<privilege authority id>",
+  "verify": "<sha256 hex>",
+  "col": "collection",
+  "seq": 1
 }
 ```
 
-```javascript
-{
-  "p" : "tap",
-  "op" : "token-send",
-  "items" : [
-     {
-      "tick": "-tap",
-      "amt": "10000",
-      "address" : "bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20",
-      "dta" : "some data"
-     },
-     {
-      "tick": "tap",
-      "amt": "10000",
-      "address" : "bc1p063utyzvjuhkn0g06l5xq6e9nv6p4kjh5yxrwsr94de5zfhrj7csns0aj4",
-      "dta" : "some data"
-     }
-  ]
-}
+Rules:
+
+- `name` visible length must be valid for the authority creation.
+- Signed mints must target the address that appears in the signed payload.
+- `verify` is a SHA-256 hash.
+- `col` is required and can be an empty string.
+- `seq` must be an unsigned integer, not a string.
+- A privilege authority can be cancelled by tapping a `privilege-auth` inscription with `cancel`.
+
+## BRC-20 Deployments
+
+TAP indexes BRC-20 deployments from block `779832` to block `861575` when they carry the built in privilege authority id:
+
+```text
+c14d3de97cecc573d86592240ef38bf5ba298c8c2eaf68e17b99dbbeedbab7e4i0
 ```
 
-```javascript
-{
-   "p":"tap",
-   "op":"token-auth",
-   "sig":{
-      "v":"1",
-      "r":"113472523327934685528808901641630457916054343054143422440331961430719594721038",
-      "s":"21393407019197854961723689634443789868582208930187383447036700552814535514199"
-   },
-   "hash":"82e2b0d098dcdab820ff866b011250af8841a6b59cedd7164bb94b63d2598de9",
-   "salt":"0.46074583388095514",
-   "redeem":{
-      "items":[
-         {
-            "tick":"gib",
-            "amt":"546",
-            "address":"bc1p9lpne8pnzq87dpygtqdd9vd3w28fknwwgv362xff9zv4ewxg6was504w20",
-            "dta" : "some data"
-         }
-      ],
-      "auth":"fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0",
-      "data":""
-   }
-}
-```
+Only deployments are indexed in this bridge path. BRC-20 mints, transfers, and other functions are not indexed as TAP operations.
 
-#### Hashed Verifications
+Once the authority permits minting, the deployed BRC-20 ticker can be used in TAP internal and external flows.
 
-Hash verifications within privileges are a general-purpose mechanism to determine what file hash (sha256) may be assigned to a given address.
+## Bitmap
 
-If an authority issues such a signed inscription text, it can signal that it sees the address as the valid owner of that hash.
+TAP indexers track Bitmap according to the original Bitmap rules. Cursed support is not part of the TAP Bitmap path.
 
-An interesting aspect of hashed verfications that these might be used as collectibles as they contain verified file hashes of linked or offchain content.
+## DMT Tokens
 
-Different authorities may have different opinions. That's why it's important that projects managing authorities, must broadcast their authority inscription ids via offchain channels to provide the source of truth.
+TAP supports DMT elements for field `4` block height, field `10` nonce, and field `11` bits, following the DMT specification at https://digital-matter-theory.gitbook.io/digital-matter-theory/introduction/digital-matter-theory. The supported operations are `dmt-deploy` and `dmt-mint`.
 
-Like deployments & mints, a signature and the inscription id of the authority must be given ("prv"). 
+From Bitcoin block `861576`, Blockdrops for DMT UNATs and Bitmaps are supported.
 
-The attribute "verify" must contain an sha256 hash, representing a hash over file contents.
-"col" must be used to specify a "collection" name to allow for organizing the hashes. Maximum allowed symbols: 512 (as of unicode).
-"seq" must be an unsigned integer, that may be arbitrary and not larger than 9007199254740991.
+## DMT NAT Miner Rewards
 
-If "seq" is passed as string, the verification will fail.
-"col" may be an empty string but must be present.
+From block `885588`, regular `dmt-nat` mints are ignored. Instead, DMT NAT rewards are credited from coinbase transaction outputs.
 
-"salt" can be used to pass extra data to make sure the resulting hash is always unique. 
-It is however recommended to use non-random salts (e.g. inscription ids) if the authority has the requirement internally to be able to re-index at all times.
+Rules:
 
-```javascript
-{
-   "p":"tap",
-   "op":"privilege-auth",
-   "sig":{
-      "v":"0",
-      "r":"102486240205705464835967036484087123773428387054126262751119766795035126943608",
-      "s":"2461281772805092833125901827999803585726660443752983045919874042616328309644"
-   },
-   "hash":"81906992bfffa87f48cdeaecff29bac840553ac0bdfb9288bed0cab6de573efc",
-   "address":"tb1pltn4mqlpxxswxhmkj2ejdd0z98v74nr0xxdresvwvp5cyvctm0zs3m750l",
-   "salt":"0.9698534940599512",
-   "prv":"e349a9126a9476eb534457a7e78c748aeca67ec4d53fa9f0772408fb7233a9fei0",
-   "verify":"cea505f61f375ea2d8ea56f593e6b436f963753616c2095e755cb5ca4a6df85c",
-   "col":"super collection",
-   "seq":111
-}
-```
+- Each block distributes DMT NAT according to the bits value of that block.
+- Reward shares follow the BTC value of coinbase outputs.
+- Outputs that cannot be credited to a valid address are treated as burned.
+- From block `941848`, miner reward addresses have `token-transfer` disabled by default.
+- Miner reward addresses must use `unblock-transferables` if they want to receive future transferables.
+- `token-send` and `token-trade` stay disabled for miner reward addresses after the shield.
+- `token-auth` redeem remains available.
 
-#### Cancel a privilege authority
+## Indexer Requirements
 
-To cancel a "privilege-auth", the authority must send an inscription like below to its associated address and tap.
-From this point on, no mints or verifications can take place anymore that originally have been managed by the authority.
-This can be used for blockouts, collection finalization etc.
+Indexers must produce the same accepted and rejected protocol state for the same ordered inscription stream.
 
-```javascript
-{
-   "p":"tap",
-   "op":"privilege-auth",
-   "cancel" : "fd3664a56cf6d14b21504e5d83a3d4867ee256f06cbe3bddf2787d6a80a86078i0"
-}
-```
+Required behavior:
 
-### BRC-20
+- Protocol changes must be activation height gated.
+- Numeric protocol values must follow the amount and stringify rules in this document.
+- Tickers must be normalized consistently.
+- Actions must reject invalid shapes before applying state.
+- Authority cancellation must be enforced as retirement for new obligations, not revocation of existing settlement rights.
+- Locks, authority balances, transfer rows, stake positions, sale records, and delegation cancellations must remain internally consistent.
+- Tests should cover happy paths, invalid shapes, duplicate consumption, cancelled authorities, insufficient available balances, decimals, stringified numbers, and attempts to bypass delegation or lock constraints.
 
-ONLY deployments as of the BRC-20 protocol specs from block 779,832 to block 861,575 are being indexed.
-No mints, transfers or any other function is allowed to be performed on them.
-
-Each deployment must contain a "prv" field with the inscription id 'c14d3de97cecc573d86592240ef38bf5ba298c8c2eaf68e17b99dbbeedbab7e4i0'.
-This inscription id represents a system privilege-authority that - once enabled - will allow for minting of the deployed BRC-20 tickers as of the privilege-authority specs above.
-
-Once the authority enabled minting, the BRC-20 tickers will be available for transfers (internal/external) like any other tokens as of the TAP Protocol specs.
-
-#### Bitmap
-
-The TAP Protocol indexer must properly index Bitmap as of the original specs, without cursed support.
-
-#### DMT (Digital Matter Theory) Tokens
-
-TAP Protocol supports elements field 4 (block height), 10 (nonce) and 11 (bits) as of the DMT specs located at https://digital-matter-theory.gitbook.io/digital-matter-theory/introduction/digital-matter-theory
-
-This includes the functions "dmt-deploy" and "dmt-mint" and work according to the DMT specs within the TAP Protocol.
-
-From Bitcoin block 861,576 onwards, Blockdrops for DMT UNats and Bitmaps are supported.
-
-#### DMT-NAT Rewards to Bitcoin Miners
-
-From (including) block 885588 onwards, instead of allowing to perform regular "dmt-nat" mints, those will be forwarded to the outputs of the coinbase transaction per block as follows:
-
-- Starting from block 885588, the dmt-mint function will ignore any attempt to mint "dmt-nat" tokens.
-- Instead, the amount of bits per newly minted blocks will be redirected as "dmt-nat" tokens to the output addresses of the coinbase transaction of a block.
-- Based on the BTC value of each output, the "dmt-nat" shares will be calculated. This also includes "op_return" values. E.g.: if there are 2 outputs equally sharing BTC rewards, the "dmt-nat" token rewards will be equally shared, as well.
-- The "dmt-nat" shares will be credited to Bitcoin wallet addressess.
-- Remaining shares that are not being credited (such as op_return shares) are considered burned.
-- from block 941848 onwards, miner reward addresses have token-transfer disabled by default and they need to use "unblock-transferables" to unlock. token-send and token-trade stay disabled. Token auth (redeem) working without change. 
-
-#### Outlook
-
-This document and the tracking for the TAP protocol will be continuously worked on and updated. Feel free to join the Discord if you have questions: https://discord.gg/sPyYDa5q6P
+The protocol is intentionally sparse in record keys because high volume indexes can hold millions of rows. New index fields should remain compact and should not duplicate data unless it is needed for efficient reads.
