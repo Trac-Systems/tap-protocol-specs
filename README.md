@@ -2,14 +2,14 @@
 
 TAP is an Ordinals metaprotocol for fungible tokens and token backed application logic on Bitcoin L1.
 
-The base token model follows the inscription based flow familiar from BRC-20. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, and sale authorities.
+The base token model follows the inscription based flow familiar from BRC-20. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, sale authorities, and AMM authorities.
 
 The protocol has two layers:
 
 | Layer | Purpose |
 | --- | --- |
 | External token layer | Deploy, mint, and inscribe transferable token balances. This layer is compatible with the usual BRC-20 style marketplace and wallet model. |
-| Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, and privileged mints. |
+| Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, AMM pools, and privileged mints. |
 
 An inscription is considered tapped when it is sent back to the account that owns or controls the action. Some signed authority redeems do not require tapping by the submitter because the authority signature is the authorization.
 
@@ -30,7 +30,7 @@ Mainnet activation heights used by the current upgrade implementation are:
 | Value stringify gate | `885588` |
 | DMT NAT miner rewards | `885588` |
 | Token authority whitelist fix | `916233` |
-| Token locks, delegated locks, staking, and sales | `999999999` pending mainnet activation review |
+| Token locks, delegated locks, staking, sales, AMM authorities, and conditional obligations | `999999999` pending mainnet activation review |
 | Miner reward shield | `941848` |
 | Miner reward transfer execution shield | `942002` |
 
@@ -351,7 +351,7 @@ Rules:
 
 ## Redeem Actions
 
-Redeems can carry an `actions` array instead of, or alongside, `items`. Actions are authority signed operations that can lock tokens, release locks, configure authority pools, manage staking positions, and run sale flows.
+Redeems can carry an `actions` array instead of, or alongside, `items`. Actions are authority signed operations that can lock tokens, release locks, configure authority pools, manage staking positions, run sale flows, and update AMM pool state.
 
 ```json
 {
@@ -419,6 +419,15 @@ General action rules:
 | `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, or ended without meeting soft cap. Caller must be the contribution claim address. | Contributor gets payment token back. |
 | `cancel-sale` | `{ op, auth }` | Controller must match, sale must allow cancellation, and sale must not be finalized or already cancelled. | Cancels an open sale. |
 | `withdraw-sale` | `{ op, auth, tick, amt, tt, to }` | Controller must match. Withdrawal is allowed after finalization, cancellation, or failed end. Target must be valid. | Returns unsold inventory or moves remaining sale token balance. |
+| `auth-cfg` with `k: "amm"` | `{ op, k, a, c, ctl, n? }` | Controller must be the current authority, two distinct assets must be valid, fee rules must be coherent. | Creates a constant product AMM authority. |
+| `add-liq` | `{ op, auth, amts, min, to, exp, ref? }` | Pool must be active, both input amounts must be available, minted LP shares must be at least `min`. | Adds TAP/TAP liquidity and mints internal LP shares. |
+| `rm-liq` | `{ op, auth, sh, min, to, own?, exp, ref? }` | LP owner must have enough shares, output amounts must satisfy `min`. | Burns LP shares and withdraws both pool assets. |
+| `swap` | `{ op, auth, m, i, amt?, out?, min?, max?, to, exp, ref? }` | Pool must be active, slippage bound must pass, and reserve math must remain valid. | Executes exact-in or exact-out TAP/TAP swaps. |
+| `sync-ext` | `{ op, auth, sid, ext, exp, sigs, salt }` | External snapshot must match the pool, threshold signatures, age, expiry, and replay rules. | Records attested external reserve data as policy input. |
+| `ob-open` | `{ op, src, amt, cl, rf, cond, ra, exp, ctx? }` | Source adapter must be explicit and authorized. Amount, targets, condition, refund height, expiry, and context are committed. | Conditional obligations for account escrow, authority backed settlement, and AMM reserve settlement. |
+| `ob-claim` | `{ op, ob, preimage }` | Obligation must be open and unconsumed. The preimage must satisfy the saved hash before refund is available. | Releases an obligation to its claim destination. |
+| `ob-refund` | `{ op, ob }` | Obligation must be open and unconsumed. Current block must be at least the saved refund height. | Returns an obligation to its refund destination. |
+| `ob-final` | `{ op, ob, preimage }` | Same condition as `ob-claim`, with destination adapter finalization. | Finalizes app level settlement, for example crediting an AMM reserve. |
 
 ### Lock Action
 
@@ -513,6 +522,133 @@ Rules:
 - The current block must be at least `refund_after`.
 - The full committed amount is returned to `refund`.
 - Refund availability does not expire.
+
+### Conditional Obligations
+
+Conditional obligations are a generic settlement primitive for cases where a normal account owned lock is not the right owner model. They are separate from legacy locks. Existing `lock`, `claim`, `refund`, delegated marketplace offers, staking, and sale flows keep their current shapes.
+
+The core lifecycle is:
+
+```text
+authorized source
+        |
+        | ob-open
+        v
+open obligation
+        |
+        +-- ob-claim or ob-final before refund height
+        |       condition must pass
+        |       destination adapter receives value
+        |
+        +-- ob-refund at or after refund height
+                refund destination receives value
+```
+
+Open an obligation:
+
+```json
+{
+  "op": "ob-open",
+  "src": {
+    "tt": "a",
+    "to": "bc1p...",
+    "tick": "tap"
+  },
+  "amt": "100",
+  "cl": {
+    "tt": "a",
+    "to": "bc1p..."
+  },
+  "rf": {
+    "tt": "a",
+    "to": "bc1p..."
+  },
+  "cond": {
+    "ty": "hash",
+    "h": "<sha256 hex>"
+  },
+  "ra": "960000",
+  "exp": "959000",
+  "ctx": {
+    "app": "example",
+    "ref": "operation-1"
+  }
+}
+```
+
+Claim, finalize, or refund:
+
+```json
+{ "op": "ob-claim", "ob": "<obligation id>", "preimage": "<preimage>" }
+```
+
+```json
+{ "op": "ob-final", "ob": "<obligation id>", "preimage": "<preimage>" }
+```
+
+```json
+{ "op": "ob-refund", "ob": "<obligation id>" }
+```
+
+Obligation fields:
+
+| Field | Meaning |
+| --- | --- |
+| `src` | Source adapter. It decides whether value can be reserved or debited. |
+| `amt` | Amount in the source asset, parsed in atomic units. |
+| `cl` | Claim destination adapter. |
+| `rf` | Refund destination adapter. |
+| `cond` | Settlement condition. The active implementation supports hashlocks. |
+| `ra` | Refund height. Refund is valid from this Bitcoin block onward. |
+| `exp` | Last block at which `ob-open` may create the obligation. |
+| `ctx` | Optional application context. It is committed to the obligation but does not grant permission. |
+
+Source adapters:
+
+| `src.tt` | Required fields | Rule |
+| --- | --- | --- |
+| `a` | `to`, `tick` | Account source. The tapped account must equal `to` and have available balance after transferables, legacy locks, and open obligations. |
+| `h` | `to`, `tick` | Authority source. `to` is the source authority id, and the authority must be active when the obligation is opened. |
+| `amm` | `pid`, `i` | AMM source. `pid` is the AMM authority and `i` is the reserve side. The pool controller must authorize the open and the pool must allow the action. |
+
+Destination adapters:
+
+| `tt` | Required fields | Rule |
+| --- | --- | --- |
+| `a` | `to` | Credits a Bitcoin account address. |
+| `h` | `to` | Credits an authority balance if the target authority is valid for the token. |
+| `amm` | `pid`, `i` | Credits an AMM reserve through AMM finalization rules. |
+| `b` | none or canonical burn address | Burns the amount when burn is allowed for that destination. |
+
+AMM obligation context:
+
+When an obligation uses an AMM source or destination and the pool has an external leg, `ctx.amm` is required. Compact keys are used because these records can become large at scale.
+
+| Field | Meaning |
+| --- | --- |
+| `pid` | AMM authority id. Must match the AMM source or destination. |
+| `i` | TAP side index, `0` or `1`. Must be the TAP asset side of the pool. |
+| `sid` | External reserve snapshot id. The snapshot must exist, match the external leg, and not be expired. |
+| `set` | External settlement reference. The protocol commits it but does not verify the external chain. |
+| `h` | Hashlock hash. Must equal `cond.h`. |
+| `ns`, `cid`, `pool`, `aid` | Optional external identifiers. If present, each must match the snapshot. |
+
+Obligation invariants:
+
+- `amt` must be a decimal string, not a JSON number. Negative values, exponent notation, comma notation, empty strings, malformed strings, and excess decimals are invalid.
+- `ob-open` must reject unknown source and destination adapters.
+- `ob-open` must reject after `exp`.
+- Source availability is checked before the obligation is opened. The same redeem cannot overcommit the same balance through multiple obligation opens.
+- The refund destination must restore the source adapter: account sources refund to the same account, authority sources refund to the same authority, and AMM sources refund to the same AMM side.
+- AMM sources and destinations only move TAP-side reserves. TAP/TAP pools can use AMM adapters directly. TAP/external pools require `ctx.amm` plus an accepted external snapshot for the other side.
+- A claim or refund can consume the obligation only once.
+- Hashlock claim and finalization require a preimage whose SHA-256 hash matches `cond.h`.
+- Hashlock claim and finalization must happen before `ra`.
+- Refund is valid at `ra` and remains valid after it. It does not expire.
+- Failed settlement must not write partial balance, status, AMM reserve, or authority updates.
+- Authority cancellation blocks new obligations from that authority. It does not block claim, finalization, or refund for obligations that were already opened.
+
+Obligations are useful when value belongs to a protocol object instead of a simple user account. The legacy lock path remains better for direct user to user HTLCs and the current signed listing marketplace flow.
 
 ## Allocations
 
@@ -1081,6 +1217,387 @@ Rules:
 
 Sale authorities can support launchpads, token presales, fixed price allocations, allowlisted mints, and refund based funding rounds.
 
+## AMM Authority
+
+An AMM authority holds pool reserves and records LP shares. The active implementation supports constant product TAP to TAP pools for add liquidity, remove liquidity, and swap. TAP/external pools can use external reserve snapshots plus conditional obligations for the TAP-side settlement leg. Snapshots are policy records only. They do not move external assets and they do not prove external consensus.
+
+Create a TAP/TAP AMM authority:
+
+```json
+{
+  "op": "auth-cfg",
+  "k": "amm",
+  "n": "TAP DMT pool",
+  "a": [
+    { "ty": "tap", "tick": "tap" },
+    { "ty": "tap", "tick": "dmt" }
+  ],
+  "c": {
+    "ty": "cpmm",
+    "fee": "30",
+    "pf": "0",
+    "min": "1000",
+    "pause": false
+  },
+  "ctl": {
+    "ty": "ta",
+    "auth": "<controller authority id>"
+  },
+  "seq": 0
+}
+```
+
+AMM config fields:
+
+| Field | Meaning |
+| --- | --- |
+| `k` | Authority kind. AMM uses `amm`. |
+| `a` | Exactly two assets. Add liquidity, remove liquidity, and swap require both assets to be TAP assets. Conditional AMM obligations can use the TAP side of a TAP/external pool. |
+| `a[].ty` | `tap` for protocol enforced TAP reserves, `ext` for attested external reserve metadata. |
+| `a[].tick` | TAP ticker when `ty` is `tap`. Tickers are normalized with the same lowercase rules as the rest of TAP. |
+| `a[].ns` | External namespace when `ty` is `ext`, for example `eip155`, `solana`, or `bitcoin`. |
+| `a[].cid` | External chain id when `ty` is `ext`. |
+| `a[].aid` | External asset id when `ty` is `ext`, for example `native`, a contract address, or a mint address. |
+| `a[].dec` | External asset decimals as an integer string. |
+| `a[].pool` | Optional external pool or contract id for external snapshots. |
+| `c.ty` | Curve type. The active implementation supports `cpmm`. |
+| `c.fee` | Swap fee in basis points. Maximum is `1000`, meaning 10 percent. |
+| `c.pf` | Protocol fee share in basis points of the swap fee. `0` disables protocol fee routing. |
+| `c.pp` | Protocol fee target. Required only when `c.pf` is greater than `0`. |
+| `c.min` | Minimum initial LP shares that are permanently assigned to the burn target. |
+| `c.pause` | Blocks new adds and swaps when true. Removes remain possible. |
+| `ctl` | Controller target. The active implementation uses a token authority controller. |
+| `seq` | Config sequence. Future updates must be monotonic. |
+
+Validation rules:
+
+- `a` must contain exactly two distinct normalized assets.
+- TAP assets must already be deployed.
+- External assets must have non-empty namespace, chain id, asset id, and decimals not greater than `38`.
+- `c.fee`, `c.pf`, and `c.min` must be integer strings. JSON numbers, decimals, exponent notation, negative values, comma strings, and malformed values are invalid.
+- `c.fee` must not exceed `1000`.
+- `c.pf` must not exceed `10000`.
+- `c.pp` must be present only when `c.pf` is greater than `0`.
+- `c.pause` must be a boolean.
+- A cancelled controller cannot create new AMM obligations.
+
+### Add Liquidity
+
+```json
+{
+  "op": "add-liq",
+  "auth": "<amm authority id>",
+  "amts": ["100000000", "50000000"],
+  "min": "70000000",
+  "to": { "tt": "a", "to": "bc1p..." },
+  "exp": "960000",
+  "ref": "client-order-id"
+}
+```
+
+Rules:
+
+- Both pool assets must be TAP assets.
+- The signer spends both amounts from available account balance.
+- The AMM authority receives both reserve amounts.
+- LP shares are internal records. They are not TAP transferable inscriptions.
+- First liquidity mints `integer_sqrt(amount0 * amount1) - c.min` shares to `to`.
+- `c.min` shares are locked to the burn target and cannot be removed.
+- Later liquidity mints `min(floor(amount0 * total_shares / reserve0), floor(amount1 * total_shares / reserve1))`.
+- Imbalanced deposits are allowed only if minted shares are at least `min`. Any imbalance benefits existing LPs.
+- `exp` is required. The action is invalid after that block height.
+- `ref` is optional and prevents duplicate execution for the same authorizer and pool.
+
+### Remove Liquidity
+
+```json
+{
+  "op": "rm-liq",
+  "auth": "<amm authority id>",
+  "sh": "10000000",
+  "min": ["9900000", "4900000"],
+  "to": { "tt": "a", "to": "bc1p..." },
+  "exp": "960000",
+  "ref": "client-order-id"
+}
+```
+
+Rules:
+
+- The signer burns account owned LP shares unless `own` points to an authority owned position controlled by the signer authority.
+- Output amounts are `floor(shares * reserve / total_shares)` for each side.
+- Each output must be at least the matching `min` value.
+- Remove is allowed while the pool is paused.
+- Remove is allowed after controller cancellation because it resolves an existing obligation.
+- Pool close is not an action. Remaining dust stays in the pool.
+
+### Swap
+
+Exact-in swap:
+
+```json
+{
+  "op": "swap",
+  "auth": "<amm authority id>",
+  "m": "xin",
+  "i": 0,
+  "amt": "10000000",
+  "min": "9800000",
+  "to": { "tt": "a", "to": "bc1p..." },
+  "exp": "960000",
+  "ref": "client-order-id"
+}
+```
+
+Exact-out swap:
+
+```json
+{
+  "op": "swap",
+  "auth": "<amm authority id>",
+  "m": "xout",
+  "i": 0,
+  "out": "10000000",
+  "max": "10200000",
+  "to": { "tt": "a", "to": "bc1p..." },
+  "exp": "960000",
+  "ref": "client-order-id"
+}
+```
+
+Swap fields:
+
+| Field | Meaning |
+| --- | --- |
+| `m` | `xin` for exact input, `xout` for exact output. |
+| `i` | Input side, `0` or `1`. |
+| `amt` | Input amount for `xin`. |
+| `min` | Minimum output for `xin`. |
+| `out` | Output amount for `xout`. |
+| `max` | Maximum input for `xout`. |
+| `to` | Output target. |
+| `exp` | Last valid block height. |
+| `ref` | Optional idempotency reference. |
+
+Exact-in formula:
+
+```text
+gross_fee = floor(amount_in * fee_bps / 10000)
+protocol_fee = floor(gross_fee * protocol_fee_share_bps / 10000)
+amount_in_after_fee = amount_in - gross_fee
+amount_out = floor(amount_in_after_fee * reserve_out / (reserve_in + amount_in_after_fee))
+```
+
+Exact-out formula:
+
+```text
+amount_in_after_fee = ceil(reserve_in * amount_out / (reserve_out - amount_out))
+amount_in = ceil(amount_in_after_fee * 10000 / (10000 - fee_bps))
+gross_fee = floor(amount_in * fee_bps / 10000)
+protocol_fee = floor(gross_fee * protocol_fee_share_bps / 10000)
+```
+
+Fee rules:
+
+- The LP fee stays in pool reserves and increases LP value.
+- If `c.pf` is greater than `0`, the protocol fee is credited to `c.pp`.
+- Fee routing can target an account, an authority, or the burn target.
+- All math is integer math in atomic units. Floor rounding is used unless a formula states `ceil`.
+
+Slippage and ordering rules:
+
+- Exact-in swaps require `min`.
+- Exact-out swaps require `max`.
+- All swaps require `exp`.
+- Same-redeem actions are evaluated in order.
+- Same-block ordering follows inscription processing order.
+- If any action in a redeem fails, no AMM state from that redeem is written.
+
+### External Reserve Snapshots
+
+External reserve snapshots let an operator publish signed liquidity data for a TAP/external pool. They are not a light client and cannot move funds.
+
+AMM config with an external leg:
+
+```json
+{
+  "op": "auth-cfg",
+  "k": "amm",
+  "a": [
+    { "ty": "tap", "tick": "tap" },
+    {
+      "ty": "ext",
+      "ns": "eip155",
+      "cid": "1",
+      "aid": "native",
+      "dec": "18",
+      "pool": "0x..."
+    }
+  ],
+  "att": {
+    "thr": 2,
+    "signers": [
+      "02...",
+      "03..."
+    ],
+    "max_age": "24",
+    "reorg": "12"
+  },
+  "c": {
+    "ty": "cpmm",
+    "fee": "30",
+    "pf": "0",
+    "min": "1000",
+    "pause": false
+  },
+  "ctl": {
+    "ty": "ta",
+    "auth": "<controller authority id>"
+  },
+  "seq": 0
+}
+```
+
+Snapshot action:
+
+```json
+{
+  "op": "sync-ext",
+  "auth": "<amm authority id>",
+  "sid": "snapshot-1",
+  "ext": {
+    "ns": "eip155",
+    "cid": "1",
+    "pool": "0x...",
+    "aid": "native",
+    "res": "250000000000000000000",
+    "h": "12345678",
+    "ts": "1710000000"
+  },
+  "exp": "960000",
+  "sigs": [
+    {
+      "hash": "...",
+      "sig": {
+        "v": "0",
+        "r": "...",
+        "s": "..."
+      }
+    }
+  ],
+  "salt": "..."
+}
+```
+
+Signed message input:
+
+```text
+[
+  "tap-amm-external-liquidity-v1",
+  auth,
+  sid,
+  ext.ns,
+  ext.cid,
+  ext.pool,
+  ext.aid,
+  ext.res,
+  ext.h,
+  ext.ts,
+  exp
+]
+```
+
+The implementation hashes the JSON stringified array plus `salt` with SHA-256.
+
+External snapshot rules:
+
+- Production style external pools require at least 2 signers.
+- Threshold cannot exceed signer count or `8`.
+- Signers must be unique compressed secp256k1 public keys.
+- Snapshot id `sid` is one time per AMM authority.
+- The snapshot binds authority id, external namespace, chain id, pool id, asset id, reserve, external height or slot, timestamp, expiry, and salt.
+- A snapshot can update AMM policy data, but it cannot debit or credit balances by itself.
+- Cross-chain AMM settlement uses `sync-ext` as signed policy input and conditional obligations for the TAP-side settlement leg. External contracts or programs still move the external asset.
+- New TAP-side obligations against a TAP/external pool must bind `ctx.amm.pid`, `ctx.amm.i`, `ctx.amm.sid`, `ctx.amm.set`, and `ctx.amm.h`.
+- `ctx.amm.sid` must reference an accepted snapshot for the same AMM authority. The snapshot must match the external leg on the other side of `ctx.amm.i`.
+- `ctx.amm.h` must equal the obligation hashlock. This binds the TAP settlement path to the same preimage as the external settlement path.
+- `ctx.amm.set` identifies the external settlement that the application or external contract expects. TAP commits this value but does not interpret it.
+
+### AMM Flow
+
+TAP/TAP pool lifecycle:
+
+```text
+controller authority
+        |
+        v
+auth-cfg k=amm
+        |
+        v
+AMM authority record
+        |
+        +-- add-liq --> authority reserve balances + LP position
+        |
+        +-- swap ----> debit trader, update reserves, credit output target
+        |
+        +-- rm-liq --> burn LP shares, debit reserves, credit output target
+```
+
+External snapshot lifecycle:
+
+```text
+external pool or contract
+        |
+        v
+attestors observe reserve
+        |
+        v
+sync-ext signed snapshot
+        |
+        v
+TAP AMM policy record
+        |
+        v
+app quote logic can read it, but TAP still does not validate the external chain
+```
+
+Attested cross-chain AMM with TAP-side obligation:
+
+```text
+external contract or program
+        |
+        v
+attestors sign reserve snapshot
+        |
+        | sync-ext
+        v
+AMM policy record
+        |
+        v
+quote engine binds snapshot, chain, asset, amount, slippage, hashlock
+        |
+        | ob-open
+        v
+TAP-side obligation
+        |
+        +-- ob-claim or ob-final after matching external settlement reveals the preimage
+        |
+        +-- ob-refund if the external settlement never completes
+```
+
+The earlier AMM-only `x-swap-*` idea is superseded by conditional obligations plus AMM source and destination adapters. That keeps the settlement primitive reusable while still requiring each adapter to prove it is allowed to move its own state.
+
+### AMM App Examples
+
+| Application | Required actions | Critical invariants |
+| --- | --- | --- |
+| TAP token swap pool | `auth-cfg k:"amm"`, `add-liq`, `swap`, `rm-liq` | Constant product math, slippage bounds, expiry, LP share accounting, no partial writes. |
+| Protocol owned liquidity | LP target `tt:"h"` on `add-liq` and controlled `rm-liq` | Authority owned LP positions, no reserve withdrawal outside valid remove logic. |
+| Fee sharing pool | `swap` with `c.pf` and `c.pp` | Protocol fee target is fixed in pool config and uses atomic integer rounding. |
+| Router | Multiple `swap` actions in one redeem | Ordered pending reserve accounting and atomic failure if a later hop misses slippage. |
+| External quote board | `sync-ext` | Snapshot replay resistance and clear attestor trust boundary. |
+| Attested cross-chain pool | `sync-ext`, `ob-open`, `ob-claim`, `ob-refund`, `ob-final` | Snapshot binding, hashlock settlement, slippage context, one-time obligation consumption, and no direct external consensus assumptions. |
+
 ## Authority Targets
 
 Several actions use compact target records:
@@ -1098,81 +1615,10 @@ Target types:
 | --- | --- |
 | `a` | Bitcoin account address. |
 | `h` | Token authority id. |
+| `amm` | AMM pool side when the action explicitly supports AMM adapters. |
 | `b` | Burn address. |
 
 The Bitcoin burn address is `1BitcoinEaterAddressDontSendf59kuE`.
-
-## Lock and Authority Index Records
-
-Token locks are stored separately from transfer rows.
-
-Lock record:
-
-```json
-{
-  "id": "<lock id>",
-  "owner": "bc1p...",
-  "auth": "<authority id>",
-  "kind": "htlc",
-  "tick": "tap",
-  "amt": "10",
-  "remaining": "10",
-  "claim": "bc1p...",
-  "refund": "bc1p...",
-  "condition": {
-    "type": "hashlock",
-    "hash": "<sha256 hex>"
-  },
-  "refund_after": 950000,
-  "data": null,
-  "blck": 940000,
-  "tx": "<txid>",
-  "vo": 0,
-  "val": "546",
-  "ins": "<inscription id>",
-  "num": 123,
-  "ts": 1710000000
-}
-```
-
-Lock consume record:
-
-```json
-{
-  "lock": "<lock id>",
-  "action": "claim",
-  "kind": "htlc",
-  "owner": "bc1p...",
-  "target": "bc1p...",
-  "tick": "tap",
-  "amt": "10",
-  "blck": 940001,
-  "tx": "<txid>",
-  "vo": 0,
-  "val": "546",
-  "ins": "<inscription id>",
-  "num": 124,
-  "ts": 1710000600
-}
-```
-
-If allocations exist, lock and consume records also include:
-
-```json
-{
-  "al": [
-    {
-      "tt": "h",
-      "to": "<authority id>",
-      "amt": "1",
-      "rl": "sr"
-    }
-  ],
-  "total": "11"
-}
-```
-
-Staking authority, stake position, reward claim, sale status, sale contribution, sale claim, sale refund, sale cancel, and sale withdrawal records are protocol records. Implementations should expose them through their own APIs without changing the record meaning.
 
 ## Example Applications
 
@@ -1188,6 +1634,9 @@ Staking authority, stake position, reward claim, sale status, sale contribution,
 | Token launchpad | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, sale state transitions. | Supports fixed rate sales with refunds if the round fails. |
 | Fee splitter | Allocations with target types `a`, `h`, and `b` | Allocation role uniqueness, target validation, refund returns all allocations to refund address. | Can route proceeds to operators, reward authorities, treasuries, or burn. |
 | Signed coupon or reward claim | Redeem `items` or `lock` with authority condition | Signature uniqueness, authority ownership, optional domain reference in `data`. | Useful for offchain games, reward systems, and bridge crediting. |
+| Account obligation escrow | `ob-open` from `src.tt:"a"`, then `ob-claim` or `ob-refund` | Source balance reservation, hashlock release, refund height, and one-time consumption. | Lets an app reserve user funds without using the legacy lock record shape. |
+| Authority backed settlement | `ob-open` from `src.tt:"h"` | Active authority at open, saved policy, atomic target validation. | Lets an authority commit balance to a future claim or refund while preserving cancellation safety. |
+| Cross-chain AMM | `sync-ext`, `ob-open` with AMM source or destination, `ob-final`, `ob-refund` | Snapshot binding, AMM reserve math, hashlock, slippage context, no partial reserve writes. | Lets TAP state represent the TAP leg of an attested external pool while the external contract handles the external leg. |
 
 ## privilege-auth
 
