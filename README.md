@@ -17,7 +17,7 @@ All ticker comparisons are case insensitive. Indexers store and compare TAP tick
 
 ## Activation Heights
 
-Mainnet activation heights used by the current upgrade implementation are:
+Mainnet activation heights for this protocol revision are:
 
 | Feature | Height |
 | --- | ---: |
@@ -30,11 +30,13 @@ Mainnet activation heights used by the current upgrade implementation are:
 | Value stringify gate | `885588` |
 | DMT NAT miner rewards | `885588` |
 | Token authority whitelist fix | `916233` |
-| Token locks, delegated locks, staking, sales, AMM authorities, and conditional obligations | `999999999` pending mainnet activation review |
+| Token locks, delegated locks, staking, sales, AMM authorities, and conditional obligations | `999999999` |
 | Miner reward shield | `941848` |
 | Miner reward transfer execution shield | `942002` |
 
-Non-mainnet indexers in the upgrade implementation activate feature gates at height `0` unless configured otherwise. Mainnet activation heights are part of consensus for production indexers.
+Non-mainnet indexers may activate feature gates at height `0` by local configuration. Mainnet activation heights are part of consensus for production indexers.
+
+Height `999999999` is the mainnet activation gate for the action authority revision in this specification. A production release can only change that height by changing the consensus configuration used by indexers.
 
 From the value stringify gate, `max`, `lim`, and `amt` values must not be JSON numbers. They must be encoded as strings. The same rule is rechecked for action amounts that are produced from delegated templates.
 
@@ -53,7 +55,7 @@ Amounts are parsed against the token deployment decimals and stored in atomic un
 }
 ```
 
-`dec` is optional for `token-deploy`. If omitted, it defaults to `18`. In the current reference behavior, an indexed decimal override must parse to an integer from `0` to `17`. Values outside the override range are not used and the default `18` remains. DMT deployments use `0` decimals.
+`dec` is optional for `token-deploy`. If omitted, it defaults to `18`. An indexed decimal override must parse to an integer from `0` to `17`. Values outside the override range are not used and the default `18` remains. DMT deployments use `0` decimals.
 
 `lim` is optional. If omitted, minting has no per mint limit beyond the remaining supply.
 
@@ -396,7 +398,36 @@ General action rules:
 - Claiming a lock sends the main amount to `claim` and sends allocations to their targets.
 - Refunding a lock sends the full committed amount, including allocations, to `refund`.
 - An action redeem that spends a token must satisfy the authority ticker whitelist if the authority has one.
-- Authority cancellation only blocks new obligations. It must not block settlement or exits for previously created obligations.
+- Authority cancellation only blocks new obligations. It must not block settlement or exits for obligations that already exist.
+
+Canonical input rules:
+
+- Redeem action fields are validated by their action shape. They do not change the global stringify handling for `max`, `lim`, and `amt`.
+- `max`, `lim`, and `amt` keep the value stringify rule described above. Numeric fields outside those names define their own parsing rule inside their action shape.
+- TAP token amounts are parsed with the deployed token decimals. The protocol does not assume 18 decimals.
+- External asset reserve values are atomic unsigned integer strings. The declared external decimal count identifies the unit but does not convert human decimals inside TAP.
+- Key affecting identifiers must be non-empty ASCII strings up to 128 bytes using only letters, numbers, `.`, `_`, `:`, and `-`.
+- Metadata keys must be non-empty ASCII strings up to 64 bytes using only letters, numbers, `.`, `_`, `:`, and `-`.
+- Metadata string values are limited to 512 bytes.
+- Metadata objects are canonicalized with sorted keys, can nest up to four levels, cannot use arrays, and must serialize to at most 1024 bytes.
+- Raw user objects that affect records are canonicalized or rejected before they are stored.
+- Scalar fields reject booleans, nulls, arrays, objects, raw JSON numbers, or whitespace-only values unless the action shape explicitly allows that type.
+- Unknown fields are rejected or ignored according to the action shape. They must not affect balance changes, keys, record identity, or state transitions. Signed objects are hashed exactly as specified by their signature domain.
+- Same-redeem actions are evaluated in order. If any action fails, the entire redeem fails atomically.
+- Faulty inputs must fail atomically. A rejected redeem must not write partial balance, lock, authority, obligation, sale, staking, or AMM state.
+
+Common field classes:
+
+| Class | Rule |
+| --- | --- |
+| TAP amount | Human decimal string parsed with the deployed TAP token decimals and stored in atomic units. Too many decimals, zero spend values, negative values, exponent notation, comma notation, malformed strings, and raw JSON numbers are invalid after the value stringify gate. |
+| Atomic integer | Unsigned integer string already expressed in atomic units. Used for AMM shares, external reserves, external heights, timestamps, basis points, and other counters that are not TAP token amounts. Leading zeros, decimals, exponent notation, negatives, commas, malformed strings, and raw JSON numbers are invalid. |
+| Height | Unsigned block height string or integer where the action shape allows it. Height values that exceed the supported range or cannot be parsed exactly are invalid. |
+| Safe id | Non-empty ASCII identifier up to the field limit, with no slash, no control character, and no whitespace-only value. |
+| Ticker | Protocol ticker normalized to lowercase for keys. User display casing is outside consensus. |
+| Target | Canonical compact object whose `tt` selects the target adapter and whose other keys are validated by that adapter. |
+| Asset | Canonical TAP or external asset object. TAP assets reference deployed tickers. External assets use atomic reserve accounting and declare their decimal precision as metadata. |
+| Metadata | Bounded object data that can be committed to records but cannot grant permission or bypass action invariants. |
 
 ### Action Matrix
 
@@ -473,7 +504,11 @@ Fields:
 | `data` | Optional application data. Some kinds require `data.dom` and `data.ref`. |
 | `al` | Optional allocation list for fees, rewards, authority credits, or burn. |
 
-The legacy `fee` object is accepted as a shorthand for an account allocation with role `of`. New applications should use `al`.
+The `fee` object is accepted as a shorthand for an account allocation with role `of`. `al` is the canonical allocation field.
+
+Lock records store canonicalized conditions. Hashlock conditions store `{ "type": "hashlock", "hash": "<lowercase sha256>" }`. Height conditions store `{ "type": "height", "min": <height> }`. Authority conditions store `{ "type": "authority", "auth": "<authority inscription id>" }`. Extra condition keys are not committed to the lock record.
+
+When `data` is present, it follows the canonical metadata rules. `data.dom` and `data.ref`, when present, must be safe identifiers. `escrow` normalizes `data.payer` and `data.payee` to validated Bitcoin addresses before the lock record is stored.
 
 ### Lock Kind Invariants
 
@@ -525,7 +560,7 @@ Rules:
 
 ### Conditional Obligations
 
-Conditional obligations are a generic settlement primitive for cases where a normal account owned lock is not the right owner model. They are separate from legacy locks. Existing `lock`, `claim`, `refund`, delegated marketplace offers, staking, and sale flows keep their current shapes.
+Conditional obligations are a generic settlement primitive for cases where a normal account owned lock is not the right owner model. They are separate from lock records. `lock`, `claim`, `refund`, delegated marketplace offers, staking, and sale flows keep their defined shapes.
 
 The core lifecycle is:
 
@@ -598,16 +633,18 @@ Obligation fields:
 | `amt` | Amount in the source asset, parsed in atomic units. |
 | `cl` | Claim destination adapter. |
 | `rf` | Refund destination adapter. |
-| `cond` | Settlement condition. The active implementation supports hashlocks. |
+| `cond` | Settlement condition. Supported condition type is hashlock. |
 | `ra` | Refund height. Refund is valid from this Bitcoin block onward. |
 | `exp` | Last block at which `ob-open` may create the obligation. |
 | `ctx` | Optional application context. It is committed to the obligation but does not grant permission. |
+
+`ctx`, when present, follows the canonical metadata rules. If `ctx.ref` is present, it must be a safe identifier because it can be indexed by reference. `ctx.amm` is a structured metadata object used by AMM obligations and is still validated by the AMM context rules below.
 
 Source adapters:
 
 | `src.tt` | Required fields | Rule |
 | --- | --- | --- |
-| `a` | `to`, `tick` | Account source. The tapped account must equal `to` and have available balance after transferables, legacy locks, and open obligations. |
+| `a` | `to`, `tick` | Account source. The tapped account must equal `to` and have available balance after transferables, locks, and open obligations. |
 | `h` | `to`, `tick` | Authority source. `to` is the source authority id, and the authority must be active when the obligation is opened. |
 | `amm` | `pid`, `i` | AMM source. `pid` is the AMM authority and `i` is the reserve side. The pool controller must authorize the open and the pool must allow the action. |
 
@@ -648,7 +685,7 @@ Obligation invariants:
 - Failed settlement must not write partial balance, status, AMM reserve, or authority updates.
 - Authority cancellation blocks new obligations from that authority. It does not block claim, finalization, or refund for obligations that were already opened.
 
-Obligations are useful when value belongs to a protocol object instead of a simple user account. The legacy lock path remains better for direct user to user HTLCs and the current signed listing marketplace flow.
+Obligations are useful when value belongs to a protocol object instead of a simple user account. Account owned locks remain the direct path for user to user HTLCs and signed listing flows.
 
 ## Allocations
 
@@ -853,7 +890,7 @@ Rules:
 - `threshold` must be positive and cannot exceed 8 or the signer count.
 - The template must produce a `lock` action after placeholders are filled.
 - Constraints are checked against placeholders and direct paths.
-- If a placeholder is not constrained to an exact value, finalizer signatures are required after final fill activation.
+- A placeholder that is not constrained to an exact value requires finalizer signatures.
 
 ### Delegation Signature Thresholds
 
@@ -877,7 +914,7 @@ sha256(JSON.stringify([
 ]) + salt)
 ```
 
-If `finalizers` is not present, the domain string is `tap-delegated-lock-v1` and the `finalizers` element is omitted.
+Delegations with `finalizers` use the `tap-delegated-lock-v2` domain and include the `finalizers` element. Delegations without `finalizers` use the `tap-delegated-lock-v1` domain and omit that element.
 
 Validation rules:
 
@@ -1038,13 +1075,13 @@ Fields:
 | `k` | Authority kind. `stk` means staking. |
 | `stk` | Token being staked. |
 | `rt` | Reward tickers. Empty array means rewards can be any token held by the authority. |
-| `ctl` | Controller. Current implementation uses `{ "ty": "ta", "auth": "<authority id>" }`. |
-| `r.cm` | Reward accounting mode. Current value is `arps`, accumulated reward per share. |
-| `r.rnd` | Rounding mode. Current value is `flr`, floor. |
-| `r.aw` | Auto withdraw. Current value is `false`. |
+| `ctl` | Controller. Staking authorities use `{ "ty": "ta", "auth": "<authority id>" }`. |
+| `r.cm` | Reward accounting mode. Allowed value is `arps`, accumulated reward per share. |
+| `r.rnd` | Rounding mode. Allowed value is `flr`, floor. |
+| `r.aw` | Auto withdraw. Allowed value is `false`. |
 | `r.ep` | Empty pool policy. Values are `reject`, `hold`, or `carry`. |
 | `r.tr` | Tiers. Each tier has `id`, block duration `dur`, and weight `w`. |
-| `r.ud` | Optional update delay. Current implementation stores it and defaults to `0`. |
+| `r.ud` | Optional update delay. The default is `0`. |
 
 Empty pool policies:
 
@@ -1097,7 +1134,7 @@ Rules:
 - Each position has its own reward debt and unlock height.
 - Rewards can be claimed while the position is open.
 - Unstake is only valid at or after the position unlock height.
-- If `unstake.rt` is present, the implementation attempts to claim that reward ticker before returning the stake.
+- If `unstake.rt` is present, the protocol claims that reward ticker before returning the stake when a claimable amount exists.
 
 Staking can support fee sharing, reward programs, vote escrow style weights, and loyalty systems. It is suitable when an application needs protocol indexed deposits and reward accounting without custody by the application server.
 
@@ -1161,7 +1198,7 @@ Fields:
 | `s.mn` | Optional minimum contribution. |
 | `s.mx` | Optional maximum contribution per claim address. |
 | `s.r` | Fixed exchange rate. `cm` must be `fix`, `rnd` is stored as `flr`. |
-| `s.ov` | Overflow policy. Current value is `reject`. |
+| `s.ov` | Overflow policy. Allowed value is `reject`. |
 | `s.cx` | If true, controller can cancel the sale. |
 | `s.alw` | Optional SHA-256 Merkle allowlist. |
 
@@ -1219,7 +1256,7 @@ Sale authorities can support launchpads, token presales, fixed price allocations
 
 ## AMM Authority
 
-An AMM authority holds pool reserves and records LP shares. The active implementation supports constant product TAP to TAP pools for add liquidity, remove liquidity, and swap. TAP/external pools can use external reserve snapshots plus conditional obligations for the TAP-side settlement leg. Snapshots are policy records only. They do not move external assets and they do not prove external consensus.
+An AMM authority holds pool reserves and records LP shares. AMM pools use constant product accounting for TAP to TAP add liquidity, remove liquidity, and swap actions. TAP/external pools can use external reserve snapshots plus conditional obligations for the TAP-side settlement leg. Snapshots are policy records only. They do not move external assets and they do not prove external consensus.
 
 Create a TAP/TAP AMM authority:
 
@@ -1260,13 +1297,13 @@ AMM config fields:
 | `a[].aid` | External asset id when `ty` is `ext`, for example `native`, a contract address, or a mint address. |
 | `a[].dec` | External asset decimals as an integer string. |
 | `a[].pool` | Optional external pool or contract id for external snapshots. |
-| `c.ty` | Curve type. The active implementation supports `cpmm`. |
+| `c.ty` | Curve type. Supported value is `cpmm`. |
 | `c.fee` | Swap fee in basis points. Maximum is `1000`, meaning 10 percent. |
 | `c.pf` | Protocol fee share in basis points of the swap fee. `0` disables protocol fee routing. |
 | `c.pp` | Protocol fee target. Required only when `c.pf` is greater than `0`. |
 | `c.min` | Minimum initial LP shares that are permanently assigned to the burn target. |
 | `c.pause` | Blocks new adds and swaps when true. Removes remain possible. |
-| `ctl` | Controller target. The active implementation uses a token authority controller. |
+| `ctl` | Controller target. AMM authorities use a token authority controller. |
 | `seq` | Config sequence. Future updates must be monotonic. |
 
 Validation rules:
@@ -1507,7 +1544,7 @@ Signed message input:
 ]
 ```
 
-The implementation hashes the JSON stringified array plus `salt` with SHA-256.
+The signature digest is SHA-256 over the JSON stringified array plus `salt`.
 
 External snapshot rules:
 
@@ -1585,7 +1622,7 @@ TAP-side obligation
         +-- ob-refund if the external settlement never completes
 ```
 
-The earlier AMM-only `x-swap-*` idea is superseded by conditional obligations plus AMM source and destination adapters. That keeps the settlement primitive reusable while still requiring each adapter to prove it is allowed to move its own state.
+Conditional obligations are the settlement primitive for AMM source and destination adapters. Each adapter must prove that it is allowed to move its own state.
 
 ### AMM App Examples
 
@@ -1634,7 +1671,7 @@ The Bitcoin burn address is `1BitcoinEaterAddressDontSendf59kuE`.
 | Token launchpad | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, sale state transitions. | Supports fixed rate sales with refunds if the round fails. |
 | Fee splitter | Allocations with target types `a`, `h`, and `b` | Allocation role uniqueness, target validation, refund returns all allocations to refund address. | Can route proceeds to operators, reward authorities, treasuries, or burn. |
 | Signed coupon or reward claim | Redeem `items` or `lock` with authority condition | Signature uniqueness, authority ownership, optional domain reference in `data`. | Useful for offchain games, reward systems, and bridge crediting. |
-| Account obligation escrow | `ob-open` from `src.tt:"a"`, then `ob-claim` or `ob-refund` | Source balance reservation, hashlock release, refund height, and one-time consumption. | Lets an app reserve user funds without using the legacy lock record shape. |
+| Account obligation escrow | `ob-open` from `src.tt:"a"`, then `ob-claim` or `ob-refund` | Source balance reservation, hashlock release, refund height, and one-time consumption. | Lets an app reserve user funds without using a normal lock record. |
 | Authority backed settlement | `ob-open` from `src.tt:"h"` | Active authority at open, saved policy, atomic target validation. | Lets an authority commit balance to a future claim or refund while preserving cancellation safety. |
 | Cross-chain AMM | `sync-ext`, `ob-open` with AMM source or destination, `ob-final`, `ob-refund` | Snapshot binding, AMM reserve math, hashlock, slippage context, no partial reserve writes. | Lets TAP state represent the TAP leg of an attested external pool while the external contract handles the external leg. |
 
@@ -1773,6 +1810,6 @@ Required behavior:
 - Actions must reject invalid shapes before applying state.
 - Authority cancellation must be enforced as retirement for new obligations, not revocation of existing settlement rights.
 - Locks, authority balances, transfer rows, stake positions, sale records, and delegation cancellations must remain internally consistent.
-- Tests should cover happy paths, invalid shapes, duplicate consumption, cancelled authorities, insufficient available balances, decimals, stringified numbers, and attempts to bypass delegation or lock constraints.
+- Conformance coverage must include happy paths, invalid shapes, duplicate consumption, cancelled authorities, insufficient available balances, decimals, stringified numbers, replay attempts, malformed JSON values, and attempts to bypass delegation, lock, obligation, sale, staking, or AMM constraints.
 
-The protocol is intentionally sparse in record keys because high volume indexes can hold millions of rows. New index fields should remain compact and should not duplicate data unless it is needed for efficient reads.
+The protocol is intentionally sparse in record keys because high volume indexes can hold millions of rows. Index fields remain compact and avoid duplicate data unless it is needed for efficient reads.
