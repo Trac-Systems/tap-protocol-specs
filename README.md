@@ -8,7 +8,7 @@ The protocol has two layers:
 
 | Layer | Purpose |
 | --- | --- |
-| External token layer | Deploy, mint, and inscribe transferable token balances. This layer is compatible with the usual BRC-20 style marketplace and wallet model. |
+| External token layer | Deploy, mint, and inscribe transferable token balances. This layer follows the usual BRC-20 style marketplace and wallet model. |
 | Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, AMM pools, and privileged mints. |
 
 An inscription is considered tapped when it is sent back to the account that owns or controls the action. Some signed authority redeems do not require tapping by the submitter because the authority signature is the authorization.
@@ -17,7 +17,7 @@ All ticker comparisons are case insensitive. Indexers store and compare TAP tick
 
 ## Activation Heights
 
-Mainnet activation heights for this protocol revision are:
+Mainnet activation heights for this specification are:
 
 | Feature | Height |
 | --- | ---: |
@@ -36,7 +36,7 @@ Mainnet activation heights for this protocol revision are:
 
 Non-mainnet indexers may activate feature gates at height `0` by local configuration. Mainnet activation heights are part of consensus for production indexers.
 
-Height `999999999` is the mainnet activation gate for the action authority revision in this specification. A production release can only change that height by changing the consensus configuration used by indexers.
+Height `999999999` is the mainnet activation gate for the action authority feature set in this specification. A production release can only change that height by changing the consensus configuration used by indexers.
 
 From the value stringify gate, `max`, `lim`, and `amt` values must not be JSON numbers. They must be encoded as strings. The same rule is rechecked for action amounts that are produced from delegated templates.
 
@@ -58,6 +58,8 @@ Amounts are parsed against the token deployment decimals and stored in atomic un
 `dec` is optional for `token-deploy`. If omitted, it defaults to `18`. An indexed decimal override must parse to an integer from `0` to `17`. Values outside the override range are not used and the default `18` remains. DMT deployments use `0` decimals.
 
 `lim` is optional. If omitted, minting has no per mint limit beyond the remaining supply.
+
+Protocol amount strings use unsigned decimal notation without commas, signs, or exponent notation. Fractional digits beyond the deployed decimal precision are truncated toward zero before the value is converted to atomic units. A spend, mint, lock, contribution, stake, or pool action is invalid when the resulting atomic amount is zero or exceeds the protocol maximum.
 
 ## External Token Operations
 
@@ -124,7 +126,7 @@ Rules:
 - `tick` and `amt` are required.
 - `amt` must resolve to a positive atomic amount.
 - The owner must have enough available balance when the transfer inscription is created.
-- Available balance is `balance - transferable - locked`.
+- Available balance is `balance - transferable - locked`. At and after the action authority activation, open account obligations are also reserved from the same balance.
 - A transfer can carry optional `dta` metadata with a string value up to 512 bytes.
 
 ## Jubilee Rules
@@ -197,7 +199,7 @@ Rules:
 
 ### token-trade
 
-`token-trade` is the original TAP token to token trade primitive. It is retained for direct TAP token trades.
+`token-trade` creates direct TAP token to token trades.
 
 Create a trade:
 
@@ -303,14 +305,14 @@ Rules:
 
 - The cancel inscription must be tapped by the authority account.
 - The referenced authority must exist and must not already be cancelled.
-- Cancellation retires the authority for new obligations. It must not revoke settlement paths for obligations that already exist.
+- Cancellation retires the authority for new exposure-creating actions. It must not revoke settlement paths for obligations and positions that already exist.
 - After cancellation, new direct redeem items are invalid.
-- After cancellation, new obligation creating actions are invalid. This includes `lock`, `execute`, `auth-cfg`, `stake`, `fund-sale`, and `contribute`.
-- After cancellation, settlement and exit actions remain valid when their own conditions are met. This includes `claim`, `refund`, `claim-rwd`, `unstake`, `finalize-sale`, `claim-sale`, `refund-sale`, eligible `withdraw-sale`, and `cancel-delegation`.
-- Existing locks, stake positions, sale contributions, sale inventories, and authority balances are not removed by cancellation.
-- Existing consumed locks are not changed by cancellation.
+- After cancellation, new exposure-creating actions are invalid. This includes `lock`, `execute`, `auth-cfg`, `stake`, `fund-sale`, `contribute`, `sync-ext`, `add-liq`, `swap`, and `ob-open`.
+- After cancellation, settlement and exit actions remain valid when their own conditions are met. This includes `claim`, `refund`, `claim-rwd`, `unstake`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, eligible `withdraw-sale`, `rm-liq`, `ob-claim`, `ob-refund`, `ob-final`, and `cancel-delegation`.
+- Existing locks, stake positions, sale contributions, sale inventories, AMM LP positions, obligations, and authority balances are not removed by cancellation.
+- Existing consumed locks and obligations are not changed by cancellation.
 
-This distinction is required for user safety. Once an authority has created a lock or accepted a user position, cancellation must not let the operator block claims, refunds, unstaking, reward claims, sale claims, or sale refunds.
+This distinction is required for user safety. Once an authority has created a lock, accepted a user position, or recorded an LP position, cancellation must not let the operator block claims, refunds, unstaking, reward claims, sale claims, sale refunds, obligation settlement, or LP removal.
 
 ### Redeem Items
 
@@ -393,22 +395,22 @@ General action rules:
 - `actions` must be a non-empty array.
 - Each action has an `op` string.
 - Each token amount spends available balance only.
-- Available balance is `balance - transferable - locked`.
+- Account available balance is `balance - transferable - locked - open account obligations`.
 - Lock creation records the full committed amount.
 - Claiming a lock sends the main amount to `claim` and sends allocations to their targets.
 - Refunding a lock sends the full committed amount, including allocations, to `refund`.
 - An action redeem that spends a token must satisfy the authority ticker whitelist if the authority has one.
-- Authority cancellation only blocks new obligations. It must not block settlement or exits for obligations that already exist.
+- Authority cancellation blocks new exposure-creating actions and new obligations. It must not block settlement or exits for obligations and positions that already exist.
 
 Canonical input rules:
 
 - Redeem action fields are validated by their action shape. They do not change the global stringify handling for `max`, `lim`, and `amt`.
 - `max`, `lim`, and `amt` keep the value stringify rule described above. Numeric fields outside those names define their own parsing rule inside their action shape.
-- TAP token amounts are parsed with the deployed token decimals. The protocol does not assume 18 decimals.
+- TAP token amounts are parsed with the deployed token decimals. Extra fractional digits are truncated toward zero. The protocol does not assume 18 decimals.
 - External asset reserve values are atomic unsigned integer strings. The declared external decimal count identifies the unit but does not convert human decimals inside TAP.
 - Key affecting identifiers must be non-empty ASCII strings up to 128 bytes using only letters, numbers, `.`, `_`, `:`, and `-`.
 - Metadata keys must be non-empty ASCII strings up to 64 bytes using only letters, numbers, `.`, `_`, `:`, and `-`.
-- Metadata string values are limited to 512 bytes.
+- Metadata string values are limited to 512 bytes. Metadata values can also be null, booleans, safe non-negative integers, or nested metadata objects when the action shape accepts metadata.
 - Metadata objects are canonicalized with sorted keys, can nest up to four levels, cannot use arrays, and must serialize to at most 1024 bytes.
 - Raw user objects that affect records are canonicalized or rejected before they are stored.
 - Scalar fields reject booleans, nulls, arrays, objects, raw JSON numbers, or whitespace-only values unless the action shape explicitly allows that type.
@@ -420,9 +422,9 @@ Common field classes:
 
 | Class | Rule |
 | --- | --- |
-| TAP amount | Human decimal string parsed with the deployed TAP token decimals and stored in atomic units. Too many decimals, zero spend values, negative values, exponent notation, comma notation, malformed strings, and raw JSON numbers are invalid after the value stringify gate. |
+| TAP amount | Human decimal string parsed with the deployed TAP token decimals and stored in atomic units. Extra fractional digits are truncated toward zero. Zero spend values, negative values, exponent notation, comma notation, malformed strings, and raw JSON numbers are invalid after the value stringify gate. |
 | Atomic integer | Unsigned integer string already expressed in atomic units. Used for AMM shares, external reserves, external heights, timestamps, basis points, and other counters that are not TAP token amounts. Leading zeros, decimals, exponent notation, negatives, commas, malformed strings, and raw JSON numbers are invalid. |
-| Height | Unsigned block height string or integer where the action shape allows it. Height values that exceed the supported range or cannot be parsed exactly are invalid. |
+| Height | Non-negative block height in the form accepted by the action shape. Lock, sale, and obligation storage heights normalize to a 32-bit block height. AMM heights and delegation block bounds use canonical unsigned integer strings where their shapes require strings. |
 | Safe id | Non-empty ASCII identifier up to the field limit, with no slash, no control character, and no whitespace-only value. |
 | Ticker | Protocol ticker normalized to lowercase for keys. User display casing is outside consensus. |
 | Target | Canonical compact object whose `tt` selects the target adapter and whose other keys are validated by that adapter. |
@@ -445,16 +447,16 @@ Common field classes:
 | `auth-cfg` with `k: "sale"` | `{ op, k, st, pt, ctl, tre, s, n? }` | Sale and payment tokens must exist, treasury target must be valid, height and cap rules must be coherent. | Launchpads, capped sales, allowlisted sales, refund based funding. |
 | `fund-sale` | `{ op, auth, tick, amt }` | Sale authority must exist, `tick` must equal the sale token, controller must have available balance. | Deposits sale inventory. |
 | `contribute` | `{ op, auth, tick, amt, claim, alw? }` | Sale must be open, `tick` must equal the payment token, caps and allowlist must pass, contributor must have available balance. | Records a buyer contribution and sale token allocation. |
-| `finalize-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize early only at hard cap, or after end when soft cap is met. | Sends payment pool to treasury and unlocks sale claims. |
+| `finalize-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize at or before end only at hard cap, or after end when soft cap is met. | Sends payment pool to treasury and unlocks sale claims. |
 | `claim-sale` | `{ op, auth, cid }` | Contribution must be open, sale must be finalized, caller must be the contribution claim address. | Contributor claims allocated sale token. |
 | `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, or ended without meeting soft cap. Caller must be the contribution claim address. | Contributor gets payment token back. |
 | `cancel-sale` | `{ op, auth }` | Controller must match, sale must allow cancellation, and sale must not be finalized or already cancelled. | Cancels an open sale. |
 | `withdraw-sale` | `{ op, auth, tick, amt, tt, to }` | Controller must match. Withdrawal is allowed after finalization, cancellation, or failed end. Target must be valid. | Returns unsold inventory or moves remaining sale token balance. |
-| `auth-cfg` with `k: "amm"` | `{ op, k, a, c, ctl, n? }` | Controller must be the current authority, two distinct assets must be valid, fee rules must be coherent. | Creates a constant product AMM authority. |
+| `auth-cfg` with `k: "amm"` | `{ op, k, a, c, ctl, n?, att? }` | Controller must be the current authority, two distinct assets must be valid, fee rules must be coherent, and external pools must configure attestors. | Creates a constant product AMM authority. |
 | `add-liq` | `{ op, auth, amts, min, to, exp, ref? }` | Pool must be active, both input amounts must be available, minted LP shares must be at least `min`. | Adds TAP/TAP liquidity and mints internal LP shares. |
 | `rm-liq` | `{ op, auth, sh, min, to, own?, exp, ref? }` | LP owner must have enough shares, output amounts must satisfy `min`. | Burns LP shares and withdraws both pool assets. |
 | `swap` | `{ op, auth, m, i, amt?, out?, min?, max?, to, exp, ref? }` | Pool must be active, slippage bound must pass, and reserve math must remain valid. | Executes exact-in or exact-out TAP/TAP swaps. |
-| `sync-ext` | `{ op, auth, sid, ext, exp, sigs, salt }` | External snapshot must match the pool, threshold signatures, age, expiry, and replay rules. | Records attested external reserve data as policy input. |
+| `sync-ext` | `{ op, auth, sid, ext, exp, sigs, salt }` | The controller must authorize the redeem, and the external snapshot must match the pool, threshold signatures, age, expiry, and replay rules. | Records attested external reserve data as policy input. |
 | `ob-open` | `{ op, src, amt, cl, rf, cond, ra, exp, ctx? }` | Source adapter must be explicit and authorized. Amount, targets, condition, refund height, expiry, and context are committed. | Conditional obligations for account escrow, authority backed settlement, and AMM reserve settlement. |
 | `ob-claim` | `{ op, ob, preimage }` | Obligation must be open and unconsumed. The preimage must satisfy the saved hash before refund is available. | Releases an obligation to its claim destination. |
 | `ob-refund` | `{ op, ob }` | Obligation must be open and unconsumed. Current block must be at least the saved refund height. | Returns an obligation to its refund destination. |
@@ -630,7 +632,7 @@ Obligation fields:
 | Field | Meaning |
 | --- | --- |
 | `src` | Source adapter. It decides whether value can be reserved or debited. |
-| `amt` | Amount in the source asset, parsed in atomic units. |
+| `amt` | Amount in the source asset, parsed with the source token decimals and stored in atomic units. |
 | `cl` | Claim destination adapter. |
 | `rf` | Refund destination adapter. |
 | `cond` | Settlement condition. Supported condition type is hashlock. |
@@ -672,7 +674,7 @@ When an obligation uses an AMM source or destination and the pool has an externa
 
 Obligation invariants:
 
-- `amt` must be a decimal string, not a JSON number. Negative values, exponent notation, comma notation, empty strings, malformed strings, and excess decimals are invalid.
+- `amt` must be a protocol amount string. Negative values, exponent notation, comma notation, malformed strings, raw JSON numbers after the value stringify gate, and values that resolve to zero are invalid. Extra fractional digits are truncated toward zero.
 - `ob-open` must reject unknown source and destination adapters.
 - `ob-open` must reject after `exp`.
 - Source availability is checked before the obligation is opened. The same redeem cannot overcommit the same balance through multiple obligation opens.
@@ -963,7 +965,7 @@ Constraints can also use exact matching:
 
 ### Final Action Signatures
 
-If `delegation.finalizers` is present, the final action must be signed by the configured finalizers. Finalizers use the same n-of-m threshold model as delegations, but they sign the filled action, not the original delegation template.
+If `delegation.finalizers` is present, the final action must be signed by the configured finalizers. Finalizers use the same n-of-m threshold model as delegations, but they sign the filled action, not the delegation template.
 
 ```json
 {
@@ -1169,7 +1171,8 @@ Create a sale authority:
     "r": {
       "cm": "fix",
       "pa": "1",
-      "sa": "100"
+      "sa": "100",
+      "rnd": "flr"
     },
     "ov": "reject",
     "cx": true,
@@ -1197,10 +1200,10 @@ Fields:
 | `s.sc` | Optional soft cap in payment token units. |
 | `s.mn` | Optional minimum contribution. |
 | `s.mx` | Optional maximum contribution per claim address. |
-| `s.r` | Fixed exchange rate. `cm` must be `fix`, `rnd` is stored as `flr`. |
+| `s.r` | Fixed exchange rate. `cm` must be `fix`; `rnd` must be `flr`; `pa` is the payment amount unit; `sa` is the sale token amount unit. |
 | `s.ov` | Overflow policy. Allowed value is `reject`. |
 | `s.cx` | If true, controller can cancel the sale. |
-| `s.alw` | Optional SHA-256 Merkle allowlist. |
+| `s.alw` | Optional SHA-256 Merkle allowlist. `lf` can be `addr` or `addr-cap`. |
 
 Sale actions:
 
@@ -1245,7 +1248,9 @@ Rules:
 - `contribute` deposits payment tokens and records the contributor claim address.
 - Contributions are accepted only during the configured block window.
 - Contributions must satisfy caps, min and max values, and allowlist rules.
-- `finalize-sale` is valid before the end height only when the hard cap is reached. After the end height, it is valid when the soft cap is reached.
+- A contribution allocates `floor(payment_amount * s.r.sa / s.r.pa)` sale token units.
+- If the sale has an allowlist, each contribution must include a valid Merkle proof. `addr-cap` allowlists bind the claim address and maximum payment amount.
+- `finalize-sale` is valid at or before the end height only when the hard cap is reached. After the end height, it is valid when the soft cap is reached.
 - Finalization sends payment tokens to the treasury target.
 - `claim-sale` lets a contributor claim allocated sale tokens after finalization.
 - `refund-sale` lets a contributor recover payment tokens if the sale is cancelled or fails its soft cap after the end height.
@@ -1279,8 +1284,7 @@ Create a TAP/TAP AMM authority:
   "ctl": {
     "ty": "ta",
     "auth": "<controller authority id>"
-  },
-  "seq": 0
+  }
 }
 ```
 
@@ -1297,26 +1301,31 @@ AMM config fields:
 | `a[].aid` | External asset id when `ty` is `ext`, for example `native`, a contract address, or a mint address. |
 | `a[].dec` | External asset decimals as an integer string. |
 | `a[].pool` | Optional external pool or contract id for external snapshots. |
+| `att` | Required attestor policy when either asset has `ty: "ext"`. Invalid when both assets are TAP assets. |
+| `att.thr` | Required attestor threshold. It must be at least `2` and cannot exceed signer count or `8`. |
+| `att.signers` | Unique secp256k1 attestor public keys, normalized to compressed keys. |
+| `att.max_age` | Maximum accepted external snapshot age in Bitcoin block intervals. One interval is treated as 600 seconds. |
+| `att.reorg` | Declared external-chain reorg tolerance. It is an unsigned height-sized integer string. |
 | `c.ty` | Curve type. Supported value is `cpmm`. |
 | `c.fee` | Swap fee in basis points. Maximum is `1000`, meaning 10 percent. |
 | `c.pf` | Protocol fee share in basis points of the swap fee. `0` disables protocol fee routing. |
 | `c.pp` | Protocol fee target. Required only when `c.pf` is greater than `0`. |
-| `c.min` | Minimum initial LP shares that are permanently assigned to the burn target. |
+| `c.min` | Minimum initial LP shares withheld from the first liquidity provider. Withheld shares remain unowned and unremovable. |
 | `c.pause` | Blocks new adds and swaps when true. Removes remain possible. |
 | `ctl` | Controller target. AMM authorities use a token authority controller. |
-| `seq` | Config sequence. Future updates must be monotonic. |
 
 Validation rules:
 
 - `a` must contain exactly two distinct normalized assets.
 - TAP assets must already be deployed.
 - External assets must have non-empty namespace, chain id, asset id, and decimals not greater than `38`.
+- External pools must include `att`; TAP/TAP pools must not include `att`.
 - `c.fee`, `c.pf`, and `c.min` must be integer strings. JSON numbers, decimals, exponent notation, negative values, comma strings, and malformed values are invalid.
 - `c.fee` must not exceed `1000`.
 - `c.pf` must not exceed `10000`.
-- `c.pp` must be present only when `c.pf` is greater than `0`.
+- `c.pp` is required when `c.pf` is greater than `0` and invalid when `c.pf` is `0`.
 - `c.pause` must be a boolean.
-- A cancelled controller cannot create new AMM obligations.
+- A cancelled controller cannot create new AMM pools, external snapshots, liquidity additions, swaps, or AMM-sourced obligations. LP removal remains available for existing LP positions.
 
 ### Add Liquidity
 
@@ -1339,7 +1348,7 @@ Rules:
 - The AMM authority receives both reserve amounts.
 - LP shares are internal records. They are not TAP transferable inscriptions.
 - First liquidity mints `integer_sqrt(amount0 * amount1) - c.min` shares to `to`.
-- `c.min` shares are locked to the burn target and cannot be removed.
+- `c.min` shares are added to total shares without an owner and cannot be removed.
 - Later liquidity mints `min(floor(amount0 * total_shares / reserve0), floor(amount1 * total_shares / reserve1))`.
 - Imbalanced deposits are allowed only if minted shares are at least `min`. Any imbalance benefits existing LPs.
 - `exp` is required. The action is invalid after that block height.
@@ -1365,7 +1374,7 @@ Rules:
 - Output amounts are `floor(shares * reserve / total_shares)` for each side.
 - Each output must be at least the matching `min` value.
 - Remove is allowed while the pool is paused.
-- Remove is allowed after controller cancellation because it resolves an existing obligation.
+- Remove is allowed after controller cancellation because it exits an existing LP position.
 - Pool close is not an action. Remaining dust stays in the pool.
 
 ### Swap
@@ -1490,8 +1499,7 @@ AMM config with an external leg:
   "ctl": {
     "ty": "ta",
     "auth": "<controller authority id>"
-  },
-  "seq": 0
+  }
 }
 ```
 
@@ -1548,9 +1556,9 @@ The signature digest is SHA-256 over the JSON stringified array plus `salt`.
 
 External snapshot rules:
 
-- Production style external pools require at least 2 signers.
+- External pools require at least 2 attestor signers.
 - Threshold cannot exceed signer count or `8`.
-- Signers must be unique compressed secp256k1 public keys.
+- Signers must be unique secp256k1 public keys and are normalized to compressed keys.
 - Snapshot id `sid` is one time per AMM authority.
 - The snapshot binds authority id, external namespace, chain id, pool id, asset id, reserve, external height or slot, timestamp, expiry, and salt.
 - A snapshot can update AMM policy data, but it cannot debit or credit balances by itself.
@@ -1663,6 +1671,8 @@ The Bitcoin burn address is `1BitcoinEaterAddressDontSendf59kuE`.
 | --- | --- | --- | --- |
 | Cross chain marketplace | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, `cancel-delegation`, allocations with `rl: "of"` and `rl: "sr"` | Delegated maker signatures, nonce uniqueness, hashlock preimage claims, refund height, fee and staking reward allocations. | Lets a maker sign once and a taker fill without the maker returning online. |
 | Direct atomic swap | `lock` with `kind: "htlc"`, `claim`, `refund` | Matching hashlocks, different refund windows, and one-time lock consumption. | Can be coordinated without a marketplace if both parties exchange lock data. |
+| HTLC liquidity bridge | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, optional allocations | Same hash preimage on TAP and the external chain, conservative refund window ordering, one-time lock consumption, and delegated LP offer expiry. | Lets bridge liquidity providers pre-sign TAP-side liquidity while an external contract or protocol locks the other side. This is a swap bridge, not wrapped-asset minting. |
+| Attested settlement bridge | `sync-ext`, `ob-open`, `ob-claim`, `ob-refund`, `ob-final`, optional `lock` with `kind: "htlc"` | Attestor threshold policy, replay-resistant event references, hashlock settlement, one-time obligation consumption, and settlement-safe exits. | Lets a bridge operator settle the TAP leg from existing TAP liquidity after externally attested lock or payment events. Redeem actions do not mint bridge supply and do not prove external chain consensus by themselves. |
 | OTC desk | `lock` with `kind: "otc"`, `claim`, `refund`, optional `execute` | Explicit counterparty reference in `data.cp`, hashlock or authority release, refund fallback. | Useful for negotiated bilateral trades that need a clear audit trail. |
 | Vesting dashboard | `lock` with `kind: "vesting"`, `claim` | Height based release and required `data.dom` plus `data.ref`. | Suitable for team allocations, grants, investor unlocks, or protocol emissions. |
 | Cooldown vault | `lock` with `kind: "cooldown"`, `claim` | Claim target must be the authority owner and no refund path is allowed. | Gives wallets or apps a protocol enforced waiting period before withdrawal. |
@@ -1776,7 +1786,7 @@ Once the authority permits minting, the deployed BRC-20 ticker can be used in TA
 
 ## Bitmap
 
-TAP indexers track Bitmap according to the original Bitmap rules. Cursed support is not part of the TAP Bitmap path.
+TAP indexers track Bitmap inscriptions under Bitmap rules. Cursed support is not part of the TAP Bitmap path.
 
 ## DMT Tokens
 
@@ -1808,8 +1818,8 @@ Required behavior:
 - Numeric protocol values must follow the amount and stringify rules in this document.
 - Tickers must be normalized consistently.
 - Actions must reject invalid shapes before applying state.
-- Authority cancellation must be enforced as retirement for new obligations, not revocation of existing settlement rights.
-- Locks, authority balances, transfer rows, stake positions, sale records, and delegation cancellations must remain internally consistent.
+- Authority cancellation must be enforced as retirement for new exposure-creating actions, not revocation of existing settlement rights.
+- Locks, authority balances, transfer rows, stake positions, sale records, AMM pools, LP positions, obligations, and delegation cancellations must remain internally consistent.
 - Conformance coverage must include happy paths, invalid shapes, duplicate consumption, cancelled authorities, insufficient available balances, decimals, stringified numbers, replay attempts, malformed JSON values, and attempts to bypass delegation, lock, obligation, sale, staking, or AMM constraints.
 
 The protocol is intentionally sparse in record keys because high volume indexes can hold millions of rows. Index fields remain compact and avoid duplicate data unless it is needed for efficient reads.
