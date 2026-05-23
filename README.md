@@ -1,14 +1,14 @@
 # TAP Protocol
 
-TAP is an Ordinals metaprotocol for fungible tokens and token backed application logic on Bitcoin L1.
+TAP is an Ordinals metaprotocol for fungible tokens and token backed state on Bitcoin L1.
 
-The base token model follows the inscription based flow familiar from BRC-20. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, sale authorities, and AMM authorities.
+The base token model uses inscription based deploy, mint, and transfer operations. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, sale authorities, and AMM authorities.
 
 The protocol has two layers:
 
 | Layer | Purpose |
 | --- | --- |
-| External token layer | Deploy, mint, and inscribe transferable token balances. This layer follows the usual BRC-20 style marketplace and wallet model. |
+| External token layer | Deploy, mint, and inscribe transferable token balances. |
 | Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, AMM pools, and privileged mints. |
 
 An inscription is considered tapped when it is sent back to the account that owns or controls the action. Some signed authority redeems do not require tapping by the submitter because the authority signature is the authorization.
@@ -30,7 +30,7 @@ Mainnet activation heights for this specification are:
 | Value stringify gate | `885588` |
 | DMT NAT miner rewards | `885588` |
 | Token authority whitelist fix | `916233` |
-| Token locks, delegated locks, staking, sales, AMM authorities, and conditional obligations | `999999999` |
+| Token locks, delegated locks, certified control, staking, sales, AMM authorities, and conditional obligations | `999999999` |
 | Miner reward shield | `941848` |
 | Miner reward transfer execution shield | `942002` |
 
@@ -257,7 +257,7 @@ Rules:
 
 ## token-auth
 
-`token-auth` lets an account create an authority and later execute signed redeems. It is the base primitive for applications that need offchain policy decisions with onchain settlement.
+`token-auth` lets an account create an authority and later execute signed redeems. It is the base primitive for signed policy decisions with onchain settlement.
 
 An authority is identified by the inscription id of the tapped `token-auth` creation inscription.
 
@@ -312,7 +312,7 @@ Rules:
 - Existing locks, stake positions, sale contributions, sale inventories, AMM LP positions, obligations, and authority balances are not removed by cancellation.
 - Existing consumed locks and obligations are not changed by cancellation.
 
-This distinction is required for user safety. Once an authority has created a lock, accepted a user position, or recorded an LP position, cancellation must not let the operator block claims, refunds, unstaking, reward claims, sale claims, sale refunds, obligation settlement, or LP removal.
+This distinction is required for user safety. Once an authority has created a lock, accepted a position, or recorded an LP position, cancellation must not block claims, refunds, unstaking, reward claims, sale claims, sale refunds, obligation settlement, or LP removal.
 
 ### Redeem Items
 
@@ -435,11 +435,11 @@ Common field classes:
 
 | `op` | Shape | Main invariant | What it enables |
 | --- | --- | --- | --- |
-| `lock` | `{ op, kind, tick, amt, claim, condition, refund?, refund_after?, data?, al? }` | Owner must have available balance for `amt + allocations`. Kind specific fields must match the invariant table below. | HTLC swaps, timed releases, escrow, OTC settlement, fee and reward routing. |
-| `execute` | `{ op, delegation, fill, final? }` | Delegation must be signed by the authority threshold, unused, unexpired, and must materialize exactly one valid `lock`. | Maker signed offers, PSBT style partial authorization, taker final fill without maker returning online. |
-| `cancel-delegation` | `{ op, auth?, nonce }` | Redeem authority must match the cancelled authority, and the nonce must be unused and uncancelled. | Cancels signed offers that were not executed. |
-| `claim` | `{ op, lock, preimage? }` | Lock must exist, must not be consumed, and the condition must be satisfied before refund is available for hashlocks. | Releases locked tokens to the claim target. |
-| `refund` | `{ op, lock }` | Lock must exist, must not be consumed, and current block must be at least `refund_after`. | Returns locked funds to the refund address. |
+| `lock` | `{ op, kind, tick, amt, claim, condition, refund?, refund_after?, data?, al?, fee?, control? }` | Owner must have available balance for `amt + allocations`. Kind specific fields must match the invariant table below. | HTLC swaps, timed releases, escrow, OTC settlement, fee and reward routing. |
+| `execute` | `{ op, delegation, fill, final? }` | Delegation must be signed by the authority threshold, unused, unexpired, and must materialize exactly one valid `lock`. | Pre-signed lock templates, partial authorization, final filled execution. |
+| `cancel-delegation` | `{ op, auth?, nonce }` | Redeem authority must match the cancelled authority, and the nonce must be unused and uncancelled. | Cancels unused delegated executions. |
+| `claim` | `{ op, lock, preimage?, cert? }` | Lock must exist, must not be consumed, the condition must be satisfied before refund is available for hashlocks, and any scoped control must pass. | Releases locked tokens to the claim target. |
+| `refund` | `{ op, lock, cert? }` | Lock must exist, must not be consumed, current block must be at least `refund_after`, and any scoped control must pass unless terminal refund is available. | Returns locked funds to the refund address. |
 | `auth-cfg` with `k: "stk"` | `{ op, k, stk, rt, ctl, r, n? }` | Controller must be the current authority, stake token must exist, reward tokens must exist unless `rt` is empty, tiers must be unique and weighted. | Staking pools with weighted tiers and reward accounting. |
 | `stake` | `{ op, auth, tick, amt, tier, claim }` | Staking authority must exist, `tick` must equal its stake token, tier must exist, staker must have available balance. | Opens an independent stake position. |
 | `claim-rwd` | `{ op, auth, pos, rt }` | Position must be open, belong to `auth`, and have positive pending reward for `rt`. | Claims accrued staking rewards without unstaking. |
@@ -460,7 +460,7 @@ Common field classes:
 | `ob-open` | `{ op, src, amt, cl, rf, cond, ra, exp, ctx? }` | Source adapter must be explicit and authorized. Amount, targets, condition, refund height, expiry, and context are committed. | Conditional obligations for account escrow, authority backed settlement, and AMM reserve settlement. |
 | `ob-claim` | `{ op, ob, preimage }` | Obligation must be open and unconsumed. The preimage must satisfy the saved hash before refund is available. | Releases an obligation to its claim destination. |
 | `ob-refund` | `{ op, ob }` | Obligation must be open and unconsumed. Current block must be at least the saved refund height. | Returns an obligation to its refund destination. |
-| `ob-final` | `{ op, ob, preimage }` | Same condition as `ob-claim`, with destination adapter finalization. | Finalizes app level settlement, for example crediting an AMM reserve. |
+| `ob-final` | `{ op, ob, preimage }` | Same condition as `ob-claim`, with destination adapter finalization. | Finalizes adapter settlement, for example crediting an AMM reserve. |
 
 ### Lock Action
 
@@ -478,8 +478,8 @@ Common field classes:
   },
   "refund_after": "950000",
   "data": {
-    "dom": "market",
-    "ref": "order-1"
+    "dom": "settlement",
+    "ref": "lock-1"
   },
   "al": [
     {
@@ -503,8 +503,10 @@ Fields:
 | `refund` | Bitcoin address that receives the full committed amount on refund, when the kind uses refund. |
 | `condition` | Claim condition. Shape depends on `kind`. |
 | `refund_after` | Bitcoin block height from which refund is allowed, when the kind uses refund. |
-| `data` | Optional application data. Some kinds require `data.dom` and `data.ref`. |
+| `data` | Optional metadata. Some kinds require `data.dom` and `data.ref`. |
 | `al` | Optional allocation list for fees, rewards, authority credits, or burn. |
+| `fee` | Optional shorthand for an account allocation with role `of`. |
+| `control` | Optional certified control policy for claim or refund. |
 
 The `fee` object is accepted as a shorthand for an account allocation with role `of`. `al` is the canonical allocation field.
 
@@ -514,9 +516,9 @@ When `data` is present, it follows the canonical metadata rules. `data.dom` and 
 
 ### Lock Kind Invariants
 
-| Kind | Condition invariant | Claim invariant | Refund invariant | Data invariant | What apps can build |
+| Kind | Condition invariant | Claim invariant | Refund invariant | Data invariant | Use |
 | --- | --- | --- | --- | --- | --- |
-| `htlc` | `condition.type` must be `hashlock`, and `condition.hash` must be SHA-256 hex. | `claim` receives `amt` only when the preimage hashes to `condition.hash` and claim happens before `refund_after`. | `refund` receives `amt + allocations` from `refund_after` onward. | No required `data` fields. | Cross chain atomic swaps, marketplace fills, escrow with preimage release, pay for secret flows. |
+| `htlc` | `condition.type` must be `hashlock`, and `condition.hash` must be SHA-256 hex. | `claim` receives `amt` only when the preimage hashes to `condition.hash` and claim happens before `refund_after`. | `refund` receives `amt + allocations` from `refund_after` onward. | No required `data` fields. | Cross chain atomic swaps, preimage settlement, escrow with preimage release, pay for secret flows. |
 | `vesting` | `condition.type` must be `height`, and `condition.min` must be a valid block height. | `claim` receives `amt` once current block is at least `condition.min`. | No refund fields are allowed. | `data.dom` and `data.ref` are required strings. | Team vesting, grant unlocks, protocol emissions, scheduled payouts. |
 | `cooldown` | `condition.type` must be `height`, and `condition.min` must be a valid block height. | `claim` must equal the authority owner and can claim once current block is at least `condition.min`. | No refund fields are allowed. | `data.dom` and `data.ref` are required strings. | Withdrawal delays, unstaking cooldowns, anti-compromise waiting periods. |
 | `escrow` | `condition.type` must be `authority`, and `condition.auth` must be an active token authority. | `claim` receives `amt` only when the authority named in `condition.auth` executes the claim. | `refund` receives `amt + allocations` from `refund_after` onward. | `data.dom`, `data.ref`, `data.payer`, and `data.payee` are required. `payer` must equal the lock owner. `payee` must equal `claim`. | Service escrow, dispute mediated sales, authority approved settlement. |
@@ -560,9 +562,138 @@ Rules:
 - The full committed amount is returned to `refund`.
 - Refund availability does not expire.
 
+### Certified Control
+
+Certified control is optional on `lock`. It can require a threshold certificate before `claim`, `refund`, or both can consume the lock.
+
+Lock policy:
+
+```json
+{
+  "op": "lock",
+  "kind": "htlc",
+  "tick": "tap",
+  "amt": "10",
+  "claim": "bc1p...",
+  "refund": "bc1p...",
+  "condition": {
+    "type": "hashlock",
+    "hash": "<sha256 hex>"
+  },
+  "refund_after": "950000",
+  "control": {
+    "type": "cert",
+    "id": "policy-1",
+    "threshold": 2,
+    "signers": [
+      "02...",
+      "03..."
+    ],
+    "scope": [
+      "claim",
+      "refund"
+    ],
+    "expires": "960000",
+    "rules": {
+      "terminal_refund_after": "970000"
+    },
+    "hash": "<policy hash>"
+  }
+}
+```
+
+Certificate:
+
+```json
+{
+  "op": "claim",
+  "lock": "<lock id>",
+  "preimage": "<preimage>",
+  "cert": {
+    "v": 1,
+    "policy": "policy-1",
+    "action": "claim",
+    "target": "<lock id>",
+    "payload_hash": "<payload hash>",
+    "nonce": "claim-1",
+    "valid_until": "950100",
+    "sigs": [
+      {
+        "signer": "02...",
+        "hash": "<message hash>",
+        "sig": {
+          "v": "0",
+          "r": "...",
+          "s": "..."
+        }
+      }
+    ]
+  }
+}
+```
+
+Policy fields:
+
+| Field | Meaning |
+| --- | --- |
+| `type` | Must be `cert`. |
+| `id` | Safe id for the policy. |
+| `threshold` | Required signature count. Parsed as an unsigned safe integer. |
+| `signers` | One to eight secp256k1 public keys. Keys are normalized to compressed form and sorted. Duplicates are invalid. |
+| `scope` | Non-empty list containing `claim`, `refund`, or both. Stored in canonical order. |
+| `expires` | Optional last Bitcoin block at which a scoped certificate can be used. |
+| `rules.terminal_refund_after` | Required when `scope` includes `refund`. It must be greater than the lock `refund_after`. |
+| `hash` | Optional policy hash supplied by the creator. If present, it must match the computed lowercase SHA-256 policy hash. |
+
+Certificate fields:
+
+| Field | Meaning |
+| --- | --- |
+| `v` | Certificate version. Missing means `1`; any other value is invalid. |
+| `policy` | Must equal the lock policy id. |
+| `action` | Must equal the consuming action, `claim` or `refund`. |
+| `target` | Must equal the consumed lock id. |
+| `payload_hash` | Lowercase SHA-256 of the canonical consuming action with `cert` removed. |
+| `nonce` | Safe id. A nonce is one time for `policy + target + action`. |
+| `valid_until` | Last Bitcoin block at which the certificate can be used. |
+| `sigs` | Signature entries from configured signers. Each entry carries `signer`, `hash`, and `sig`. Only unique valid signers count. |
+
+Canonical rules:
+
+- `control` is only valid on `lock`.
+- `cert` is only valid on `claim` and `refund`.
+- Unknown top-level `control` or `cert` fields are invalid.
+- A `cert` is invalid when the consumed lock has no matching scoped `control`.
+- A scoped `claim` requires a valid `cert`.
+- A scoped `refund` requires a valid `cert` before `terminal_refund_after`.
+- A scoped `refund` can execute without `cert` at or after `terminal_refund_after`.
+- `terminal_refund_after` never changes the normal `refund_after` rule. Refund is still invalid before `refund_after`.
+- Certified-control canonical JSON sorts object keys. It accepts nulls, booleans, strings, arrays, objects, and safe integers. Unsafe numbers and undefined values are invalid.
+- The policy hash is lowercase SHA-256 of the canonical policy without `hash`.
+- The certificate message is:
+
+```text
+sha256(canonical_json([
+  "tap-certified-control-v1",
+  "tap",
+  policy.id,
+  policy.hash,
+  action,
+  target,
+  payload_hash,
+  nonce,
+  valid_until
+]))
+```
+
+- Each signature entry must declare its signer, use the certificate message hash, and recover to the declared signer.
+- Threshold validation counts unique valid configured signers.
+- A consumed certified action stores the canonical certificate signer set.
+- A failed certificate must not consume the lock or the certificate nonce.
+
 ### Conditional Obligations
 
-Conditional obligations are a generic settlement primitive for cases where a normal account owned lock is not the right owner model. They are separate from lock records. `lock`, `claim`, `refund`, delegated marketplace offers, staking, and sale flows keep their defined shapes.
+Conditional obligations are a generic settlement primitive for cases where a normal account owned lock is not the right owner model. They are separate from lock records. `lock`, `claim`, `refund`, delegated execution, staking, and sale flows keep their defined shapes.
 
 The core lifecycle is:
 
@@ -607,7 +738,7 @@ Open an obligation:
   "ra": "960000",
   "exp": "959000",
   "ctx": {
-    "app": "example",
+    "dom": "example",
     "ref": "operation-1"
   }
 }
@@ -638,7 +769,7 @@ Obligation fields:
 | `cond` | Settlement condition. Supported condition type is hashlock. |
 | `ra` | Refund height. Refund is valid from this Bitcoin block onward. |
 | `exp` | Last block at which `ob-open` may create the obligation. |
-| `ctx` | Optional application context. It is committed to the obligation but does not grant permission. |
+| `ctx` | Optional context. It is committed to the obligation but does not grant permission. |
 
 `ctx`, when present, follows the canonical metadata rules. If `ctx.ref` is present, it must be a safe identifier because it can be indexed by reference. `ctx.amm` is a structured metadata object used by AMM obligations and is still validated by the AMM context rules below.
 
@@ -668,7 +799,7 @@ When an obligation uses an AMM source or destination and the pool has an externa
 | `pid` | AMM authority id. Must match the AMM source or destination. |
 | `i` | TAP side index, `0` or `1`. Must be the TAP asset side of the pool. |
 | `sid` | External reserve snapshot id. The snapshot must exist, match the external leg, and not be expired. |
-| `set` | External settlement reference. The protocol commits it but does not verify the external chain. |
+| `set` | External settlement reference. The protocol commits it but does not verify external state. |
 | `h` | Hashlock hash. Must equal `cond.h`. |
 | `ns`, `cid`, `pool`, `aid` | Optional external identifiers. If present, each must match the snapshot. |
 
@@ -687,7 +818,7 @@ Obligation invariants:
 - Failed settlement must not write partial balance, status, AMM reserve, or authority updates.
 - Authority cancellation blocks new obligations from that authority. It does not block claim, finalization, or refund for obligations that were already opened.
 
-Obligations are useful when value belongs to a protocol object instead of a simple user account. Account owned locks remain the direct path for user to user HTLCs and signed listing flows.
+Obligations are useful when value belongs to a protocol object instead of a simple user account. Account owned locks remain the direct path for account HTLCs and delegated lock flows.
 
 ## Allocations
 
@@ -736,12 +867,10 @@ Rules:
 
 Delegated execution lets an authority pre-sign a lock template. A later filler provides the final values, and anyone can inscribe the final action if the signatures and constraints pass.
 
-This is useful for marketplaces because the maker signs once, then the taker executes without requiring the maker to come back online.
-
 Authority setup:
 
 ```text
-authority wallet
+authority account
   |
   | inscribe token-auth with auth array
   | tap to own address
@@ -753,20 +882,20 @@ active token authority
 redeem items and redeem actions
 ```
 
-Delegated execution with a maker and a taker:
+Delegated execution lifecycle:
 
 ```text
-maker authority
+authority
   |
   | signs delegation:
   | auth, nonce, expiry, threshold,
   | signers, template, constraints
   v
-signed delegation offer
+signed delegation
   |
   | offchain discovery
   v
-taker
+filler
   |
   | chooses fill values:
   | claim, refund, hash, refund_after
@@ -774,9 +903,9 @@ taker
   v
 token-auth redeem with execute action
   |
-  | inscribed by taker or any broadcaster
+  | inscribed by the filler or any broadcaster
   v
-indexer
+ordered inscription stream
   |
   | verifies authority, signatures, constraints,
   | nonce, expiry, whitelist, and available balance
@@ -787,7 +916,7 @@ lock record
 Delegation cancellation:
 
 ```text
-authority wallet
+authority account
   |
   | signs and taps normal redeem action
   | { op: "cancel-delegation", nonce }
@@ -796,7 +925,7 @@ delegation cancel record
   |
   | same auth + nonce can no longer execute
   v
-stale offchain offer is unusable
+stale delegated execution is unusable
 ```
 
 Delegated-only redeem:
@@ -818,7 +947,7 @@ Delegated-only redeem:
         "op": "execute",
         "delegation": {
           "auth": "<authority inscription id>",
-          "nonce": "order-1",
+          "nonce": "delegation-1",
           "expiry": "960000",
           "threshold": 1,
           "signers": [
@@ -933,9 +1062,9 @@ Common patterns:
 
 | Pattern | Shape | Use |
 | --- | --- | --- |
-| 1-of-1 | `threshold: 1`, one signer, authority key included | Single authority signs an executable offer. |
-| 2-of-2 | `threshold: 2`, authority key and operator key | Authority and operator must both approve. Useful when an operator enforces fee or marketplace policy. |
-| 2-of-3 or higher | Multiple signers, threshold below signer count | Redundant operator or committee approval without requiring every signer to be online. |
+| 1-of-1 | `threshold: 1`, one signer, authority key included | Single authority signs an executable delegation. |
+| 2-of-2 | `threshold: 2`, authority key and policy key | Authority and policy signer must both approve. Useful when a secondary signer enforces fee or domain policy. |
+| 2-of-3 or higher | Multiple signers, threshold below signer count | Redundant policy signer or committee approval without requiring every signer to be online. |
 
 Supported constraint types:
 
@@ -998,7 +1127,7 @@ The execute action then includes:
 }
 ```
 
-Final signatures protect takers and operators when the maker template allows values that are not exact at maker signing time.
+Final signatures protect filled actions when the delegation template allows values that are not exact at delegation signing time.
 
 The finalizer message is:
 
@@ -1020,7 +1149,7 @@ Finalizer validation counts unique valid signatures from `finalizers.signers`. T
 {
   "op": "cancel-delegation",
   "auth": "<authority inscription id>",
-  "nonce": "order-1"
+  "nonce": "delegation-1"
 }
 ```
 
@@ -1041,7 +1170,7 @@ Create a staking authority:
 {
   "op": "auth-cfg",
   "k": "stk",
-  "n": "Marketplace staking",
+  "n": "Example staking",
   "stk": "tap",
   "rt": [],
   "ctl": {
@@ -1138,7 +1267,7 @@ Rules:
 - Unstake is only valid at or after the position unlock height.
 - If `unstake.rt` is present, the protocol claims that reward ticker before returning the stake when a claimable amount exists.
 
-Staking can support fee sharing, reward programs, vote escrow style weights, and loyalty systems. It is suitable when an application needs protocol indexed deposits and reward accounting without custody by the application server.
+Staking can support fee sharing, reward programs, vote escrow style weights, and loyalty systems. It records deposits and reward accounting without custody by an external process.
 
 ## Sale Authority
 
@@ -1461,7 +1590,7 @@ Slippage and ordering rules:
 
 ### External Reserve Snapshots
 
-External reserve snapshots let an operator publish signed liquidity data for a TAP/external pool. They are not a light client and cannot move funds.
+External reserve snapshots publish signed liquidity data for a TAP/external pool. They are not a light client and cannot move funds.
 
 AMM config with an external leg:
 
@@ -1566,7 +1695,7 @@ External snapshot rules:
 - New TAP-side obligations against a TAP/external pool must bind `ctx.amm.pid`, `ctx.amm.i`, `ctx.amm.sid`, `ctx.amm.set`, and `ctx.amm.h`.
 - `ctx.amm.sid` must reference an accepted snapshot for the same AMM authority. The snapshot must match the external leg on the other side of `ctx.amm.i`.
 - `ctx.amm.h` must equal the obligation hashlock. This binds the TAP settlement path to the same preimage as the external settlement path.
-- `ctx.amm.set` identifies the external settlement that the application or external contract expects. TAP commits this value but does not interpret it.
+- `ctx.amm.set` identifies the external settlement reference. TAP commits this value but does not interpret it.
 
 ### AMM Flow
 
@@ -1591,7 +1720,7 @@ AMM authority record
 External snapshot lifecycle:
 
 ```text
-external pool or contract
+external pool
         |
         v
 attestors observe reserve
@@ -1603,13 +1732,13 @@ sync-ext signed snapshot
 TAP AMM policy record
         |
         v
-app quote logic can read it, but TAP still does not validate the external chain
+quoted state can read it, but TAP still does not validate external state
 ```
 
 Attested cross-chain AMM with TAP-side obligation:
 
 ```text
-external contract or program
+external settlement source
         |
         v
 attestors sign reserve snapshot
@@ -1619,7 +1748,7 @@ attestors sign reserve snapshot
 AMM policy record
         |
         v
-quote engine binds snapshot, chain, asset, amount, slippage, hashlock
+settlement context binds snapshot, chain, asset, amount, slippage, hashlock
         |
         | ob-open
         v
@@ -1632,9 +1761,9 @@ TAP-side obligation
 
 Conditional obligations are the settlement primitive for AMM source and destination adapters. Each adapter must prove that it is allowed to move its own state.
 
-### AMM App Examples
+### AMM Composition Patterns
 
-| Application | Required actions | Critical invariants |
+| Pattern | Required actions | Critical invariants |
 | --- | --- | --- |
 | TAP token swap pool | `auth-cfg k:"amm"`, `add-liq`, `swap`, `rm-liq` | Constant product math, slippage bounds, expiry, LP share accounting, no partial writes. |
 | Protocol owned liquidity | LP target `tt:"h"` on `add-liq` and controlled `rm-liq` | Authority owned LP positions, no reserve withdrawal outside valid remove logic. |
@@ -1665,25 +1794,25 @@ Target types:
 
 The Bitcoin burn address is `1BitcoinEaterAddressDontSendf59kuE`.
 
-## Example Applications
+## Protocol Composition Patterns
 
-| Application | Main actions and kinds | Required invariant support | Notes |
+| Pattern | Main actions and kinds | Required invariant support | Notes |
 | --- | --- | --- | --- |
-| Cross chain marketplace | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, `cancel-delegation`, allocations with `rl: "of"` and `rl: "sr"` | Delegated maker signatures, nonce uniqueness, hashlock preimage claims, refund height, fee and staking reward allocations. | Lets a maker sign once and a taker fill without the maker returning online. |
-| Direct atomic swap | `lock` with `kind: "htlc"`, `claim`, `refund` | Matching hashlocks, different refund windows, and one-time lock consumption. | Can be coordinated without a marketplace if both parties exchange lock data. |
-| HTLC liquidity bridge | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, optional allocations | Same hash preimage on TAP and the external chain, conservative refund window ordering, one-time lock consumption, and delegated LP offer expiry. | Lets bridge liquidity providers pre-sign TAP-side liquidity while an external contract or protocol locks the other side. This is a swap bridge, not wrapped-asset minting. |
-| Attested settlement bridge | `sync-ext`, `ob-open`, `ob-claim`, `ob-refund`, `ob-final`, optional `lock` with `kind: "htlc"` | Attestor threshold policy, replay-resistant event references, hashlock settlement, one-time obligation consumption, and settlement-safe exits. | Lets a bridge operator settle the TAP leg from existing TAP liquidity after externally attested lock or payment events. Redeem actions do not mint bridge supply and do not prove external chain consensus by themselves. |
-| OTC desk | `lock` with `kind: "otc"`, `claim`, `refund`, optional `execute` | Explicit counterparty reference in `data.cp`, hashlock or authority release, refund fallback. | Useful for negotiated bilateral trades that need a clear audit trail. |
-| Vesting dashboard | `lock` with `kind: "vesting"`, `claim` | Height based release and required `data.dom` plus `data.ref`. | Suitable for team allocations, grants, investor unlocks, or protocol emissions. |
-| Cooldown vault | `lock` with `kind: "cooldown"`, `claim` | Claim target must be the authority owner and no refund path is allowed. | Gives wallets or apps a protocol enforced waiting period before withdrawal. |
-| Service escrow | `lock` with `kind: "escrow"`, `claim`, `refund` | Authority controlled claim, payer and payee binding, refund fallback. | A mediator can approve release while the payer keeps refund protection. |
-| Staking rewards | `auth-cfg` with `k: "stk"`, `stake`, `claim-rwd`, `unstake`, allocations with `rl: "sr"` | Weighted tiers, per-position reward debt, reward tick rules, unlock height, empty pool policy. | Supports fee sharing, loyalty rewards, and long term holder programs. |
-| Token launchpad | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, sale state transitions. | Supports fixed rate sales with refunds if the round fails. |
-| Fee splitter | Allocations with target types `a`, `h`, and `b` | Allocation role uniqueness, target validation, refund returns all allocations to refund address. | Can route proceeds to operators, reward authorities, treasuries, or burn. |
-| Signed coupon or reward claim | Redeem `items` or `lock` with authority condition | Signature uniqueness, authority ownership, optional domain reference in `data`. | Useful for offchain games, reward systems, and bridge crediting. |
-| Account obligation escrow | `ob-open` from `src.tt:"a"`, then `ob-claim` or `ob-refund` | Source balance reservation, hashlock release, refund height, and one-time consumption. | Lets an app reserve user funds without using a normal lock record. |
-| Authority backed settlement | `ob-open` from `src.tt:"h"` | Active authority at open, saved policy, atomic target validation. | Lets an authority commit balance to a future claim or refund while preserving cancellation safety. |
-| Cross-chain AMM | `sync-ext`, `ob-open` with AMM source or destination, `ob-final`, `ob-refund` | Snapshot binding, AMM reserve math, hashlock, slippage context, no partial reserve writes. | Lets TAP state represent the TAP leg of an attested external pool while the external contract handles the external leg. |
+| Delegated HTLC settlement | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, `cancel-delegation`, allocations with `rl: "of"` and `rl: "sr"` | Delegation signatures, nonce uniqueness, hashlock preimage claims, refund height, fee and staking reward allocations. | One authority signs a template once; a later filler supplies constrained values. |
+| Direct atomic swap | `lock` with `kind: "htlc"`, `claim`, `refund` | Matching hashlocks, different refund windows, and one-time lock consumption. | Participants exchange lock data offchain. |
+| HTLC liquidity bridge | `execute`, `lock` with `kind: "htlc"`, `claim`, `refund`, optional allocations | Same hash preimage on TAP and the external leg, conservative refund window ordering, one-time lock consumption, and delegated LP expiry. | Swap bridge pattern. Not wrapped-asset minting. |
+| Attested settlement bridge | `sync-ext`, `ob-open`, `ob-claim`, `ob-refund`, `ob-final`, optional `lock` with `kind: "htlc"` | Attestor threshold policy, replay-resistant event references, hashlock settlement, one-time obligation consumption, and settlement-safe exits. | Redeem actions do not mint bridge supply and do not prove external consensus by themselves. |
+| OTC settlement | `lock` with `kind: "otc"`, `claim`, `refund`, optional `execute` | Explicit counterparty reference in `data.cp`, hashlock or authority release, refund fallback. | Negotiated bilateral settlement with an indexed audit trail. |
+| Vesting | `lock` with `kind: "vesting"`, `claim` | Height based release and required `data.dom` plus `data.ref`. | Scheduled release. |
+| Cooldown | `lock` with `kind: "cooldown"`, `claim` | Claim target must be the authority owner and no refund path is allowed. | Protocol enforced waiting period before withdrawal. |
+| Escrow | `lock` with `kind: "escrow"`, `claim`, `refund` | Authority controlled claim, payer and payee binding, refund fallback. | Mediated release with refund protection. |
+| Staking rewards | `auth-cfg` with `k: "stk"`, `stake`, `claim-rwd`, `unstake`, allocations with `rl: "sr"` | Weighted tiers, per-position reward debt, reward tick rules, unlock height, empty pool policy. | Fee sharing, loyalty rewards, and long term holder programs. |
+| Token sale | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, sale state transitions. | Fixed rate sale with refunds if the round fails. |
+| Fee splitter | Allocations with target types `a`, `h`, and `b` | Allocation role uniqueness, target validation, refund returns all allocations to refund address. | Routes proceeds to accounts, reward authorities, treasuries, or burn. |
+| Signed reward claim | Redeem `items` or `lock` with authority condition | Signature uniqueness, authority ownership, optional domain reference in `data`. | Offchain reward or credit authorization. |
+| Account obligation escrow | `ob-open` from `src.tt:"a"`, then `ob-claim` or `ob-refund` | Source balance reservation, hashlock release, refund height, and one-time consumption. | Account funds reserved without a normal lock record. |
+| Authority backed settlement | `ob-open` from `src.tt:"h"` | Active authority at open, saved policy, atomic target validation. | Authority balance committed to a future claim or refund while preserving cancellation safety. |
+| Cross-chain AMM | `sync-ext`, `ob-open` with AMM source or destination, `ob-final`, `ob-refund` | Snapshot binding, AMM reserve math, hashlock, slippage context, no partial reserve writes. | TAP-side state for an attested external pool leg. |
 
 ## privilege-auth
 
@@ -1802,6 +1931,7 @@ Rules:
 
 - Each block distributes DMT NAT according to the bits value of that block.
 - Reward shares follow the BTC value of coinbase outputs.
+- The reward denominator includes every coinbase output, including non-addressable outputs and `OP_RETURN` outputs.
 - Outputs that cannot be credited to a valid address are treated as burned.
 - From block `941848`, miner reward addresses have `token-transfer` disabled by default.
 - Miner reward addresses must use `unblock-transferables` if they want to receive future transferables.
@@ -1820,6 +1950,6 @@ Required behavior:
 - Actions must reject invalid shapes before applying state.
 - Authority cancellation must be enforced as retirement for new exposure-creating actions, not revocation of existing settlement rights.
 - Locks, authority balances, transfer rows, stake positions, sale records, AMM pools, LP positions, obligations, and delegation cancellations must remain internally consistent.
-- Conformance coverage must include happy paths, invalid shapes, duplicate consumption, cancelled authorities, insufficient available balances, decimals, stringified numbers, replay attempts, malformed JSON values, and attempts to bypass delegation, lock, obligation, sale, staking, or AMM constraints.
+- Conformance coverage must include happy paths, invalid shapes, duplicate consumption, cancelled authorities, insufficient available balances, decimals, stringified numbers, replay attempts, malformed JSON values, and attempts to bypass delegation, certified control, lock, obligation, sale, staking, or AMM constraints.
 
 The protocol is intentionally sparse in record keys because high volume indexes can hold millions of rows. Index fields remain compact and avoid duplicate data unless it is needed for efficient reads.
