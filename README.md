@@ -416,7 +416,8 @@ Canonical input rules:
 - Scalar fields reject booleans, nulls, arrays, objects, raw JSON numbers, or whitespace-only values unless the action shape explicitly allows that type.
 - Unknown fields are rejected or ignored according to the action shape. They must not affect balance changes, keys, record identity, or state transitions. Signed objects are hashed exactly as specified by their signature domain.
 - Same-redeem actions are evaluated in order. If any action fails, the entire redeem fails atomically.
-- Faulty inputs must fail atomically. A rejected redeem must not write partial balance, lock, authority, obligation, sale, staking, or AMM state.
+- Faulty inputs must fail atomically. A rejected redeem must not write partial balance, lock, authority, obligation, sale, staking, AMM, perp, nonce, delegation, event, transfer, or index state.
+- Accepted redeem rows are written only after every action side effect is valid and committed.
 
 Common field classes:
 
@@ -449,8 +450,9 @@ Common field classes:
 | `fund-sale` | `{ op, auth, tick, amt }` | Sale authority must exist, `tick` must equal the sale token, controller must have available balance. | Deposits sale inventory. |
 | `contribute` | `{ op, auth, tick, amt, claim, alw? }` | Sale must be open, `tick` must equal the payment token, caps and allowlist must pass, contributor must have available balance. | Records a buyer contribution and sale token allocation. |
 | `finalize-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize at or before end only at hard cap, or after end when soft cap is met. | Sends payment pool to treasury and unlocks sale claims. |
+| `resolve-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize if finalization invariants hold, or mark failed/refundable after deterministic failure conditions. | Public terminal sale resolution without controller liveness. |
 | `claim-sale` | `{ op, auth, cid }` | Contribution must be open, sale must be finalized, caller must be the contribution claim address. | Contributor claims allocated sale token. |
-| `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, or ended without meeting soft cap. Caller must be the contribution claim address. | Contributor gets payment token back. |
+| `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, failed/refundable, or ended without meeting soft cap. Caller must be the contribution claim address. | Contributor gets payment token back. |
 | `cancel-sale` | `{ op, auth }` | Controller must match, sale must allow cancellation, and sale must not be finalized or already cancelled. | Cancels an open sale. |
 | `withdraw-sale` | `{ op, auth, tick, amt, tt, to }` | Controller must match. Withdrawal is allowed after finalization, cancellation, or failed end. Target must be valid. | Returns unsold inventory or moves remaining sale token balance. |
 | `auth-cfg` with `k: "amm"` | `{ op, k, a, c, ctl, n?, att? }` | Controller must be the current authority, two distinct assets must be valid, fee rules must be coherent, and external pools must configure attestors. | Creates a constant product AMM authority. |
@@ -468,10 +470,10 @@ Common field classes:
 | `perp-external-evidence` | `{ op, gid, purpose, evidence }` | Group must use external collateral. Evidence must match the group, collateral, settlement surface, purpose, finality, sequence, policy threshold, and state hash. | Records accepted external settlement-surface evidence without crediting spendable TAP balances. |
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past deadline. | Moves an unactivated group to cancelled state. |
 | `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, caller must equal the stored refund target, and optional `to` must equal that target. | Returns original collateral from a cancelled group. |
-| `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation and ready. Certificate purpose must be `entry` and match policy, group, group hash, state hash, sequence, signer threshold, and block validity. | Freezes entry price and makes funded positions active. |
+| `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation and ready. Certificate purpose must be `entry` and match policy, group, group hash, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
 | `perp-close` | `{ op, gid, pos, qty, cert }` | Position owner must submit, group and position must be active, quantity must be valid open collateral, and close certificate must validate. | Closes all or part of a position and reserves realized equity until settlement. |
 | `perp-liquidate` | `{ op, gid, pos, cert }` | Position must be active and below maintenance at the certified price. | Closes unsafe open collateral and records liquidation accounting. |
-| `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, expiry reached, signed settlement certificate or committed fallback must validate, and payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and per-position payouts. |
+| `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, expiry reached, signed settlement certificate or committed fallback must validate, and aggregate payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and claim formula. |
 | `perp-claim` | `{ op, gid, pos, to? }` | Group must be settled or defaulted, position payout must be unclaimed, caller must equal the stored claim target, and optional `to` must equal that target. | Claims a settled payout. |
 
 ### Lock Action
@@ -1589,7 +1591,7 @@ Certificate rules:
 - Failed certificates do not consume the sequence.
 - Fallback settlement consumes a deterministic fallback marker and does not create a price-certificate history entry.
 
-For non-TAP collateral enforcement, a settlement certificate must also bind the exact chain-local settlement payload. At minimum the bound payload must include group id, operator fee amount, pool fee amount, every position id, every payout amount, and the payout order accepted by that chain. A valid certificate for one payout set must not be reusable with another conserved payout set.
+For non-TAP collateral enforcement, a settlement certificate must also bind the exact chain-local settlement payload. At minimum the bound payload must include group id, operator fee amount, pool fee amount, claim pool, total equity, aggregate settlement terms, and the chain-local claim formula accepted by that chain. A valid certificate for one conserved settlement set must not be reusable with another conserved settlement set.
 
 The certificate signature message is:
 
@@ -1599,19 +1601,20 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 ### Active And Terminal State
 
-`perp-activate` requires a ready formation group and a valid certificate. It stores the entry price and marks formation positions active. Original-collateral refund is no longer available after activation.
+`perp-activate` requires a ready formation group and a valid certificate. It stores the entry price and moves the group to active state. Position activity is derived from the position and group state. Original-collateral refund is no longer available after activation.
 
 `perp-close` requires the position owner. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
 
 `perp-liquidate` closes a position when equity falls below the maintenance threshold. Liquidation records equity and may pay a configured bounty only if the state transition succeeds.
 
-`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes equity for every active, closed, or liquidated position, applies settlement fee and bounty, and records immutable per-position payouts.
+`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, applies settlement fee and bounty, and records an immutable claim formula. It does not scan positions and does not write per-position payout rows.
 
 For external collateral groups, settlement records the same terminal accounting in protocol state but does not mint or release TAP balances. Chain-local settlement, fee payment, claim, and refund are enforced by the committed settlement surface. The protocol record must still conserve the external collateral amount recorded by accepted evidence.
 
 Settlement payout rule:
 
 ```text
+settlement_bounty = min(configured_settlement_bounty, available_bounty_reserve)
 settlement_balance = group_authority_balance - settlement_bounty
 initial_fee = floor(total_equity * fee_bps / 10000)
 
@@ -1623,7 +1626,9 @@ else:
   fee = settlement_balance - claim_pool
 ```
 
-If `claim_pool < total_equity`, each positive equity claim receives a pro-rata payout. Floor dust is assigned by largest remainder, with original position order as the deterministic tie breaker. `assigned + fee + bounty + residual` never exceeds the group authority balance.
+If the payable bounty is zero, settlement remains valid. Bounty availability is not a terminal validity condition.
+
+If `claim_pool < total_equity`, each positive equity claim receives `floor(position_equity * claim_pool / total_equity)`. Floor dust remains in the residual bucket. `claimed_total + fee + bounty + residual` never exceeds the group authority balance.
 
 Settlement fee split rule:
 
@@ -1636,11 +1641,11 @@ fee_dust = fee - sum(receiver_fee_i)
 
 Account fee receivers credit the receiver account. Staking reward receivers credit the target staking authority reward accumulator for the group collateral ticker using the same reward accounting as ordinary staking reward allocations. A settlement that cannot credit an `sr` receiver rejects. Refund, cancel, and unactivated exit paths do not allocate settlement fees.
 
-Terminal settlement state records total equity, claim pool, assigned payouts, total settlement fee, receiver-level fee amounts, bounty amount, residual, default flag, and deterministic dust handling. Duplicate settlement rejects.
+Terminal settlement state records total equity, claim pool, claimed total, total settlement fee, receiver-level fee amounts, bounty amount, residual, default flag, open-side aggregate equity, closed equity, and deterministic dust handling. Duplicate settlement rejects.
 
-If a block containing a settlement is removed by chain reorganization, every balance debit, balance credit, receiver fee credit, staking reward allocation, bounty record, claimable payout, position status update, and terminal group status created by that settlement is removed with it. Re-applying the same surviving inscription after the reorg must produce the same state as first application.
+If a block containing a settlement is removed by chain reorganization, every balance debit, balance credit, receiver fee credit, staking reward allocation, bounty record, settlement aggregate, claimed-total update, position status update, and terminal group status created by that settlement is removed with it. Re-applying the same surviving inscription after the reorg must produce the same state as first application.
 
-`perp-claim` pays the immutable claim target after settlement or default. If `to` is present, it must equal the stored claim target. Duplicate claims reject.
+`perp-claim` pays the immutable claim target after settlement or default. The claim amount is computed from the position record and terminal settlement formula, then added to group `claimed_total`. If `to` is present, it must equal the stored claim target. Duplicate claims reject.
 
 ## Staking Authority
 
@@ -1831,6 +1836,10 @@ Sale actions:
 ```
 
 ```json
+{ "op": "resolve-sale", "auth": "<sale authority id>" }
+```
+
+```json
 { "op": "claim-sale", "auth": "<sale authority id>", "cid": "<contribution id>" }
 ```
 
@@ -1861,10 +1870,13 @@ Rules:
 - Contributions must satisfy caps, min and max values, and allowlist rules.
 - A contribution allocates `floor(payment_amount * s.r.sa / s.r.pa)` sale token units.
 - If the sale has an allowlist, each contribution must include a valid Merkle proof. `addr-cap` allowlists bind the claim address and maximum payment amount.
-- `finalize-sale` is valid at or before the end height only when the hard cap is reached. After the end height, it is valid when the soft cap is reached.
-- Finalization sends payment tokens to the treasury target.
+- `finalize-sale` is valid at or before the end height only when the hard cap is reached. After the end height, it is valid when the soft cap is reached. It requires the controller authority.
+- Finalization sends payment tokens to the treasury target when payment balance, inventory balance, allocation totals, and target credit are all valid.
+- `resolve-sale` is public. It finalizes under the same finalization invariants, or marks the sale failed/refundable when deterministic failure conditions are met.
+- Deterministic failure reasons include missed soft cap, inventory underfunding, payment underfunding, and unavailable treasury target.
+- `resolve-sale` writes one terminal resolution record. Duplicate or conflicting sale terminal actions reject atomically.
 - `claim-sale` lets a contributor claim allocated sale tokens after finalization.
-- `refund-sale` lets a contributor recover payment tokens if the sale is cancelled or fails its soft cap after the end height.
+- `refund-sale` lets a contributor recover payment tokens if the sale is cancelled, failed/refundable, or fails its soft cap after the end height.
 - `cancel-sale` is only valid when cancellation is enabled by `s.cx`.
 - `withdraw-sale` lets the controller withdraw remaining sale tokens after finalization, cancellation, or failed end.
 
@@ -2289,7 +2301,7 @@ The Bitcoin burn address is `1BitcoinEaterAddressDontSendf59kuE`.
 | Cooldown | `lock` with `kind: "cooldown"`, `claim` | Claim target must be the authority owner and no refund path is allowed. | Protocol enforced waiting period before withdrawal. |
 | Escrow | `lock` with `kind: "escrow"`, `claim`, `refund` | Authority controlled claim, payer and payee binding, refund fallback. | Mediated release with refund protection. |
 | Staking rewards | `auth-cfg` with `k: "stk"`, `stake`, `claim-rwd`, `unstake`, allocations with `rl: "sr"` | Weighted tiers, per-position reward debt, reward tick rules, unlock height, empty pool policy. | Fee sharing, loyalty rewards, and long term holder programs. |
-| Token sale | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, sale state transitions. | Fixed rate sale with refunds if the round fails. |
+| Token sale | `auth-cfg` with `k: "sale"`, `fund-sale`, `contribute`, `finalize-sale`, `resolve-sale`, `claim-sale`, `refund-sale`, `cancel-sale`, `withdraw-sale` | Hard cap, soft cap, contribution bounds, Merkle allowlist, treasury target, public resolution, sale state transitions. | Fixed rate sale with refunds if the round fails. |
 | Fee splitter | Allocations with target types `a`, `h`, and `b` | Allocation role uniqueness, target validation, refund returns all allocations to refund address. | Routes proceeds to accounts, reward authorities, treasuries, or burn. |
 | Signed reward claim | Redeem `items` or `lock` with authority condition | Signature uniqueness, authority ownership, optional domain reference in `data`. | Offchain reward or credit authorization. |
 | Account obligation escrow | `ob-open` from `src.tt:"a"`, then `ob-claim` or `ob-refund` | Source balance reservation, hashlock release, refund height, and one-time consumption. | Account funds reserved without a normal lock record. |
