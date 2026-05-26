@@ -1302,7 +1302,7 @@ Perp groups are isolated fixed-lifetime margin groups. A group has formation, ac
   "fee": {
     "rules": ["settlement-positive-payout-bps-v1"],
     "max_bps": "200",
-    "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000" }]
+    "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000", "rl": "pf" }]
   },
   "bounty": {
     "rules": {
@@ -1333,7 +1333,7 @@ Policy fields:
 | `oracle` | Price certificate rules, staleness bounds, and fallback names. Signers and threshold are the policy signer set and `thr`. |
 | `liq` | Liquidation rule set and minimum maintenance margin. |
 | `def` | Group-local default and dust assignment rule. |
-| `fee` | Settlement fee rules, maximum bps, and receivers. Receiver shares must sum to the committed total. |
+| `fee` | Settlement fee rules, maximum bps, and canonical receiver list. Receiver shares must sum to `10000`. |
 | `bounty` | Submitter bounty caps for activation, liquidation, and settlement. |
 | `exp` | Last block where the policy action can be accepted. |
 
@@ -1342,6 +1342,24 @@ The policy hash is the canonical hash of the action without `hash` and `sigs`. T
 ```text
 sha256(canonical_json(["tap-perp-policy-v1", "tap", id, seq, policy_hash]))
 ```
+
+Perp fee receivers are canonical targets:
+
+- Account receiver: `{ "tt": "a", "to": "<address>", "share": "<bps-share>", "rl": "pf" }`.
+- Operator account receiver may also use role `of`.
+- Staking reward receiver: `{ "tt": "h", "to": "<staking authority id>", "share": "<bps-share>", "rl": "sr" }`.
+- `share` is an integer string from `1` to `10000`.
+- The receiver list must be non-empty and must not exceed `16` entries.
+- Receiver shares must sum exactly to `10000`.
+- Receiver order is committed and is used for deterministic dust assignment.
+- Duplicate receiver triples reject.
+- Duplicate receiver roles reject.
+- `tt: "a"` receivers must target valid addresses and may only use `pf` or `of`.
+- `tt: "h"` receivers must target an existing staking authority and may only use `sr`.
+- `sr` is only valid for TAP-collateral groups. It credits the staking authority reward accumulator for the group collateral ticker.
+- If the staking authority restricts reward tickers, the group collateral ticker must be allowed.
+- If the staking authority has no shares, `sr` allocation is valid only when the authority empty-pool policy preserves rewards for later accounting.
+- Malformed targets, unsafe authority ids, zero shares, negative values, decimal values, exponent notation, non-string amount fields, unknown roles, and non-canonical receiver shapes reject.
 
 ### Group Formation
 
@@ -1388,7 +1406,7 @@ sha256(canonical_json(["tap-perp-policy-v1", "tap", id, seq, policy_hash]))
   "fee": {
     "rule": "settlement-positive-payout-bps-v1",
     "bps": "200",
-    "recv": [{ "tt": "a", "to": "bc1p...", "share": "10000" }]
+    "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000", "rl": "pf" }]
   },
   "bounty": { "rule": "operator-policy-bounty-v1", "activate": "policy-default", "liquidate": "policy-default", "settle": "policy-default" },
   "oracle": { "rule": "spot-vwap-v1", "source": "spot", "max_age": "144" }
@@ -1398,6 +1416,8 @@ sha256(canonical_json(["tap-perp-policy-v1", "tap", id, seq, policy_hash]))
 The group id is derived from inscription id plus action index. It is not read from the payload.
 
 Group creation records policy id, policy hash, group terms hash, pair assets, collateral asset, formation bounds, expiry, readiness thresholds, leverage bounds, maintenance margin, fee rule, fee receivers, bounty caps, oracle rule, and state `formation`.
+
+The group fee rule must be an exact copy of the referenced policy fee rule. It must not reduce fees, increase fees, reorder receivers, drop receivers, add receivers, change receiver targets, change receiver roles, change shares, or replace the rule name. A group whose fee rule differs from the policy fee rule rejects even if the difference would reduce the fee.
 
 Collateral mode is explicit:
 
@@ -1569,7 +1589,7 @@ Certificate rules:
 - Failed certificates do not consume the sequence.
 - Fallback settlement consumes a deterministic fallback marker and does not create a price-certificate history entry.
 
-For non-TAP collateral enforcement, a settlement certificate must also bind the exact chain-local settlement payload. At minimum the bound payload must include group id, fee amount, every position id, every payout amount, and the payout order accepted by that chain. A valid certificate for one payout set must not be reusable with another conserved payout set.
+For non-TAP collateral enforcement, a settlement certificate must also bind the exact chain-local settlement payload. At minimum the bound payload must include group id, operator fee amount, pool fee amount, every position id, every payout amount, and the payout order accepted by that chain. A valid certificate for one payout set must not be reusable with another conserved payout set.
 
 The certificate signature message is:
 
@@ -1604,6 +1624,21 @@ else:
 ```
 
 If `claim_pool < total_equity`, each positive equity claim receives a pro-rata payout. Floor dust is assigned by largest remainder, with original position order as the deterministic tie breaker. `assigned + fee + bounty + residual` never exceeds the group authority balance.
+
+Settlement fee split rule:
+
+```text
+receiver_fee_i = floor(fee * receiver_share_i / 10000)
+fee_dust = fee - sum(receiver_fee_i)
+```
+
+`fee_dust` is assigned one atomic unit at a time to receivers sorted by largest remainder, with receiver list order as the deterministic tie breaker. Receiver-level fee amounts sum exactly to `fee`.
+
+Account fee receivers credit the receiver account. Staking reward receivers credit the target staking authority reward accumulator for the group collateral ticker using the same reward accounting as ordinary staking reward allocations. A settlement that cannot credit an `sr` receiver rejects. Refund, cancel, and unactivated exit paths do not allocate settlement fees.
+
+Terminal settlement state records total equity, claim pool, assigned payouts, total settlement fee, receiver-level fee amounts, bounty amount, residual, default flag, and deterministic dust handling. Duplicate settlement rejects.
+
+If a block containing a settlement is removed by chain reorganization, every balance debit, balance credit, receiver fee credit, staking reward allocation, bounty record, claimable payout, position status update, and terminal group status created by that settlement is removed with it. Re-applying the same surviving inscription after the reorg must produce the same state as first application.
 
 `perp-claim` pays the immutable claim target after settlement or default. If `to` is present, it must equal the stored claim target. Duplicate claims reject.
 
