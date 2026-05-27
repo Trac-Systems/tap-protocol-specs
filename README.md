@@ -1534,8 +1534,9 @@ External evidence rules:
 
 - `dom` must be `tap-perp-external-evidence-v1`.
 - The top-level `purpose` and `evidence.purpose` must match.
-- Accepted purposes are `external-lock`, `external-activation`, `external-settlement`, `external-fallback-settlement`, `external-refund`, and `external-claim`.
+- Accepted purposes are `external-lock`, `external-close`, and `external-liquidation`.
 - The initial funding path accepts `external-lock` for groups in formation state. It creates a formation position keyed by the external position id.
+- `external-close` and `external-liquidation` are valid only for active groups and open external positions.
 - Evidence must match the stored policy id, policy hash, group id, group terms hash, collateral asset, collateral mode, and settlement surface.
 - Supported external collateral modes are `evm-perp-escrow`, `bsc-perp-escrow`, and `solana-perp-program`.
 - `evidence.mode` must equal the group collateral mode, and `evidence.surface.kind` must equal the committed settlement surface kind.
@@ -1554,6 +1555,14 @@ sha256(canonical_json(["tap-perp-external-evidence-v1", "tap", policy_id, policy
 - Evidence for one group, policy, purpose, chain id, collateral asset, settlement surface, or external position is not valid for another.
 - External lock evidence must include owner, side, amount, leverage, entry bound, claim target, refund target, external transaction id, external index, external height, and finality rule.
 - External lock evidence creates a protocol position with external claim and refund targets. TAP `perp-claim` and `perp-refund` are invalid for external-collateral positions because local recovery is enforced by the external settlement surface.
+- External close evidence must include external group id, external position id, transaction id, height, finality rule, owner, action `close`, price, open collateral before close, external state hash, computed equity, zero bounty, and recipient.
+- External liquidation evidence must include external group id, external position id, transaction id, height, finality rule, owner, action `liquidation`, price, open collateral before liquidation, external state hash, computed equity, maintenance amount, bounty amount, and recipient.
+- External terminal evidence must match the stored position owner, group, position id, settlement surface, collateral asset, open collateral, and current active position state.
+- External terminal evidence recomputes equity from stored side, leverage, entry price, open collateral, and evidence price. A mismatch rejects.
+- External liquidation evidence recomputes `maintenance = open_collateral * maintenance_bps / 10000` and rejects unless `equity <= maintenance`.
+- External close evidence rejects nonzero bounty.
+- Accepted external terminal evidence sets position open collateral to zero, stores closed equity, updates group open-collateral aggregates, updates closed-equity totals, updates liquidated-equity totals for liquidation, records the accepted price as the group mark, and writes evidence/event rows.
+- External evidence signatures certify the external settlement surface fact. The protocol commits and validates the certified fields; it does not independently prove external consensus.
 - External evidence may be recorded for reader-visible audit history. It must not by itself credit or debit TAP balances.
 
 ### Price Certificates
@@ -1648,16 +1657,34 @@ settlement_balance = group_authority_balance - settlement_bounty
 initial_fee = floor(total_equity * fee_bps / 10000)
 
 if total_equity + initial_fee <= settlement_balance:
-  claim_pool = total_equity
   fee = initial_fee
 else:
   claim_pool = floor(settlement_balance * (10000 - fee_bps) / 10000)
   fee = settlement_balance - claim_pool
+
+claim_pool = settlement_balance - fee
+claim_basis_total = total_equity if total_equity > 0 else total_original_collateral
+claim_basis_remaining = claim_basis_total
+claim_pool_remaining = claim_pool
 ```
 
 If the payable bounty is zero, settlement remains valid. Bounty availability is not a terminal validity condition.
 
-If `claim_pool < total_equity`, each positive equity claim receives `floor(position_equity * claim_pool / total_equity)`. Floor dust remains in the residual bucket. `claimed_total + fee + bounty + residual` never exceeds the group authority balance.
+Claim payout rule:
+
+```text
+position_basis = position_equity if total_equity > 0 else position_original_collateral
+
+if position_basis == claim_basis_remaining:
+  payout = claim_pool_remaining
+else:
+  payout = floor(position_basis * claim_pool_remaining / claim_basis_remaining)
+
+claim_basis_remaining -= position_basis
+claim_pool_remaining -= payout
+```
+
+The last claimant for the remaining basis receives the remaining claim pool. `claimed_total + fee + bounty` never exceeds the group authority balance, and no residual collateral remains assigned to nobody.
 
 Settlement fee split rule:
 
