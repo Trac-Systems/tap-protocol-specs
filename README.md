@@ -464,13 +464,13 @@ Common field classes:
 | `ob-claim` | `{ op, ob, preimage }` | Obligation must be open and unconsumed. The preimage must satisfy the saved hash before refund is available. | Releases an obligation to its claim destination. |
 | `ob-refund` | `{ op, ob }` | Obligation must be open and unconsumed. Current block must be at least the saved refund height. | Returns an obligation to its refund destination. |
 | `ob-final` | `{ op, ob, preimage }` | Same condition as `ob-claim`, with destination adapter finalization. | Finalizes adapter settlement, for example crediting an AMM reserve. |
-| `perp-policy` | `{ op, id, v, dom, net, seq, thr, signers, assets, limits, oracle, liq, def, fee, bounty, exp, sigs, hash? }` | Policy id, domain, network, constraints, signers, threshold, signatures, and expiry must validate. Updates must increase `seq` and satisfy previous signer threshold. | Registers an operator policy for isolated perp groups. |
-| `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, collateral, formation, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, and oracle terms must fit the policy. | Creates a non-active group in formation state. |
-| `perp-join` | `{ op, gid, src, side, coll, lev, claim, refund, ctx? }` | Group must be in formation, side and leverage must be allowed, caller must match `src`, collateral must be available, and pending same-redeem debits must not overcommit balance. Only valid for TAP-account collateral groups. | Funds a long or short TAP-collateral position in a group. |
-| `perp-external-evidence` | `{ op, gid, purpose, evidence }` | Group must use external collateral. Evidence must match the group, collateral, settlement surface, purpose, finality, sequence, policy threshold, and state hash. | Records accepted external settlement-surface evidence without crediting spendable TAP balances. |
+| `perp-policy` | `{ op, id, v, dom, net, seq, thr, signers, assets, limits, oracle, liq, def, fee, bounty, entry, exp, sigs, hash? }` | Policy id, domain, network, constraints, entry-bound policy, signers, threshold, signatures, and expiry must validate. Updates must increase `seq` and satisfy previous signer threshold. | Registers an operator policy for isolated perp groups. |
+| `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, entry, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, collateral, formation, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, oracle, and entry-bound terms must fit the policy. | Creates a non-active group in formation state. |
+| `perp-join` | `{ op, gid, src, side, coll, lev, entry, claim, refund, ctx? }` | Group must be in formation, side and leverage must be allowed, entry bound must match group policy, caller must match `src`, collateral must be available, and pending same-redeem debits must not overcommit balance. Only valid for TAP-account collateral groups. | Funds a long or short TAP-collateral position in a group. |
+| `perp-external-evidence` | `{ op, gid, purpose, evidence }` | Group must use external collateral. Evidence must match the group, collateral, settlement surface, entry bound, purpose, finality, sequence, policy threshold, and state hash. | Records accepted external settlement-surface evidence without crediting spendable TAP balances. |
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past deadline. | Moves an unactivated group to cancelled state. |
 | `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, caller must equal the stored refund target, and optional `to` must equal that target. | Returns original collateral from a cancelled group. |
-| `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation and ready. Certificate purpose must be `entry` and match policy, group, group hash, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
+| `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation and ready. Certificate purpose must be `entry` and match policy, group, group hash, aggregate entry bounds, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
 | `perp-close` | `{ op, gid, pos, qty, cert }` | Position owner must submit, group and position must be active, quantity must be valid open collateral, and close certificate must validate. | Closes all or part of a position and reserves realized equity until settlement. |
 | `perp-liquidate` | `{ op, gid, pos, cert }` | Position must be active and below maintenance at the certified price. | Closes unsafe open collateral and records liquidation accounting. |
 | `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, expiry reached, signed settlement certificate or committed fallback must validate, and aggregate payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and claim formula. |
@@ -1060,6 +1060,7 @@ Rules:
       "side": "$side",
       "coll": "$collateral",
       "lev": { "n": "$leverage", "d": "1" },
+      "entry": "$entry",
       "claim": { "tt": "a", "to": "$owner" },
       "refund": { "tt": "a", "to": "$owner" }
     },
@@ -1067,7 +1068,8 @@ Rules:
       "owner": { "type": "btc-address" },
       "side": { "allowed": ["long", "short"] },
       "collateral": { "type": "number-string" },
-      "leverage": { "type": "number-string" }
+      "leverage": { "type": "number-string" },
+      "entry": { "allowed": [{ "max": { "p": "109", "q": "10000" } }] }
     },
     "sigs": [
       { "hash": "...", "sig": { "v": "0", "r": "...", "s": "..." } }
@@ -1078,7 +1080,8 @@ Rules:
     "owner": "bc1p...",
     "side": "long",
     "collateral": "100",
-    "leverage": "10"
+    "leverage": "10",
+    "entry": { "max": { "p": "109", "q": "10000" } }
   }
 }
 ```
@@ -1313,6 +1316,12 @@ Perp groups are isolated fixed-lifetime margin groups. A group has formation, ac
       "settle": { "mode": "cap", "bps": "0", "cap": "3000", "public": true }
     }
   },
+  "entry": {
+    "mode": "one-sided-v1",
+    "required": true,
+    "allow_unbounded": false,
+    "max_slippage_bps": "500"
+  },
   "exp": "999999999",
   "sigs": [
     { "signer": "02...", "hash": "<message hash>", "sig": { "v": "0", "r": "...", "s": "..." } }
@@ -1337,6 +1346,7 @@ Policy fields:
 | `def` | Group-local default and dust assignment rule. |
 | `fee` | Settlement fee rules, maximum bps, and canonical receiver list. Receiver shares must sum to `10000`. |
 | `bounty` | Submitter bounty caps for activation, liquidation, and settlement. |
+| `entry` | Entry-bound policy for positions formed before activation. |
 | `exp` | Last block where the policy action can be accepted. |
 
 The policy hash is the canonical hash of the action without `hash` and `sigs`. The policy signature message is:
@@ -1411,13 +1421,14 @@ Perp fee receivers are canonical targets:
     "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000", "rl": "pf" }]
   },
   "bounty": { "rule": "operator-policy-bounty-v1", "activate": "policy-default", "liquidate": "policy-default", "settle": "policy-default" },
-  "oracle": { "rule": "spot-vwap-v1", "source": "spot", "max_age": "144" }
+  "oracle": { "rule": "spot-vwap-v1", "source": "spot", "max_age": "144" },
+  "entry": { "mode": "one-sided-v1", "required": true, "allow_unbounded": false, "max_slippage_bps": "500" }
 }
 ```
 
 The group id is derived from inscription id plus action index. It is not read from the payload.
 
-Group creation records policy id, policy hash, group terms hash, pair assets, collateral asset, formation bounds, expiry, readiness thresholds, leverage bounds, maintenance margin, fee rule, fee receivers, bounty caps, oracle rule, and state `formation`.
+Group creation records policy id, policy hash, group terms hash, pair assets, collateral asset, formation bounds, expiry, readiness thresholds, leverage bounds, maintenance margin, fee rule, fee receivers, bounty caps, oracle rule, entry-bound policy, empty aggregate entry bounds, and state `formation`.
 
 The group fee rule must be an exact copy of the referenced policy fee rule. It must not reduce fees, increase fees, reorder receivers, drop receivers, add receivers, change receiver targets, change receiver roles, change shares, or replace the rule name. A group whose fee rule differs from the policy fee rule rejects even if the difference would reduce the fee.
 
@@ -1446,12 +1457,29 @@ Raw tickers, symbols, chain ids, and external asset ids are not written directly
   "side": "long",
   "coll": "100",
   "lev": { "n": "10", "d": "1" },
+  "entry": { "max": { "p": "109", "q": "10000" } },
   "claim": { "tt": "a", "to": "bc1p..." },
   "refund": { "tt": "a", "to": "bc1p..." }
 }
 ```
 
 For `tap-account` collateral, join debits the caller's available collateral and credits the group authority. Same-redeem pending debits are included before acceptance. `claim` and `refund` are immutable payout targets for that position.
+
+Entry-bound rules:
+
+- `entry.mode` is stored on the group from policy-controlled terms.
+- `one-sided-v1` accepts `entry.max` for long positions and `entry.min` for short positions.
+- Ratio fields are `{ "p": "<unsigned integer string>", "q": "<positive unsigned integer string>" }`.
+- Long activation price must be less than or equal to the strictest stored long maximum.
+- Short activation price must be greater than or equal to the strictest stored short minimum.
+- Comparisons use exact cross multiplication. Implementations must not divide, round, or use floating point.
+- A required entry policy rejects missing bounds.
+- Unsupported side/bound combinations reject.
+- A valid join stores the bound on the position and updates group aggregate bounds in O(1).
+- Aggregate bounds are reader-visible group state.
+- Activation checks aggregate bounds in O(1). It must not scan positions.
+- If activation price violates aggregate bounds, activation rejects without consuming certificate replay state and without mutating group state.
+- A group that cannot activate because of entry bounds remains cancellable after formation deadline and positions remain refundable through `perp-refund`.
 
 If a group is past the deadline and has not activated, `perp-cancel` moves it to `cancelled`. This remains valid even if the group is ready, because no participant should be stranded when activation was not submitted. Only then can a participant use `perp-refund`. Refund pays the immutable refund target. If `to` is present, it must equal the stored target.
 
@@ -1490,6 +1518,7 @@ External collateral groups use `perp-external-evidence` to record certified fact
       "side": "long",
       "amount": "1000000",
       "lev": { "n": "10", "d": "1" },
+      "entry": { "max": { "p": "109", "q": "10000" } },
       "claim": "<external payout target>",
       "refund": "<external refund target>"
     },
@@ -1523,7 +1552,7 @@ sha256(canonical_json(["tap-perp-external-evidence-v1", "tap", policy_id, policy
 - Duplicate evidence ids reject.
 - A sequence must increase for the same policy, group, purpose, collateral asset, settlement surface, and external position.
 - Evidence for one group, policy, purpose, chain id, collateral asset, settlement surface, or external position is not valid for another.
-- External lock evidence must include owner, side, amount, leverage, claim target, refund target, external transaction id, external index, external height, and finality rule.
+- External lock evidence must include owner, side, amount, leverage, entry bound, claim target, refund target, external transaction id, external index, external height, and finality rule.
 - External lock evidence creates a protocol position with external claim and refund targets. TAP `perp-claim` and `perp-refund` are invalid for external-collateral positions because local recovery is enforced by the external settlement surface.
 - External evidence may be recorded for reader-visible audit history. It must not by itself credit or debit TAP balances.
 
@@ -1601,7 +1630,7 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 ### Active And Terminal State
 
-`perp-activate` requires a ready formation group and a valid certificate. It stores the entry price and moves the group to active state. Position activity is derived from the position and group state. Original-collateral refund is no longer available after activation.
+`perp-activate` requires a ready formation group and a valid certificate. The certificate price must satisfy the stored aggregate entry bounds before any mutation. It stores the entry price and moves the group to active state. Position activity is derived from the position and group state. Original-collateral refund is no longer available after activation.
 
 `perp-close` requires the position owner. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
 
