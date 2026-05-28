@@ -467,7 +467,6 @@ Common field classes:
 | `perp-policy` | `{ op, id, v, dom, net, seq, thr, signers, assets, limits, oracle, liq, def, fee, bounty, entry, exp, sigs, hash? }` | Policy id, domain, network, constraints, entry-bound policy, signers, threshold, signatures, and expiry must validate. Updates must increase `seq` and satisfy previous signer threshold. | Registers an operator policy for isolated perp groups. |
 | `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, entry, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, collateral, formation, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, oracle, and entry-bound terms must fit the policy. | Creates a non-active group in formation state. |
 | `perp-join` | `{ op, gid, src, side, coll, lev, entry, claim, refund, ctx? }` | Group must be in formation, side and leverage must be allowed, entry bound must match group policy, caller must match `src`, collateral must be available, and pending same-redeem debits must not overcommit balance. Only valid for TAP-account collateral groups. | Funds a long or short TAP-collateral position in a group. |
-| `perp-external-evidence` | `{ op, gid, purpose, evidence }` | Group must use external collateral. Evidence must match the group, collateral, settlement surface, entry bound, purpose, finality, sequence, policy threshold, and state hash. | Records accepted external settlement-surface evidence without crediting spendable TAP balances. |
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past deadline. | Moves an unactivated group to cancelled state. |
 | `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, and optional `to` must equal the stored refund target. Payout always goes to the stored refund target. | Returns original collateral from a cancelled group. |
 | `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation and ready. Certificate purpose must be `entry` and match policy, group, group hash, aggregate entry bounds, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
@@ -1258,7 +1257,7 @@ Rules:
 
 ## Perp Groups
 
-Perp groups are isolated fixed-lifetime margin groups. A group has formation, active, terminal, and exit states. TAP collateral is held by the group authority id. External collateral is represented by committed group terms plus accepted external evidence, and remains enforced by its own settlement surface. No group can debit balances outside its committed collateral pool.
+Perp groups are isolated fixed-lifetime margin groups. A group has formation, active, terminal, and exit states. TAP collateral is held by the group authority id. Perp collateral inside this protocol is TAP collateral only. External quote or oracle metadata is price metadata only and does not create external custody or settlement state. No group can debit balances outside its committed collateral pool.
 
 ### Perp Policy
 
@@ -1433,10 +1432,10 @@ The group fee rule must be an exact copy of the referenced policy fee rule. It m
 Collateral mode is explicit:
 
 - `tap-account` collateral debits and credits TAP balances inside the protocol.
-- External collateral modes record the external asset identity and a settlement surface. They do not debit or credit TAP balances.
-- An external collateral group must include `coll.surface`. The surface object must identify the chain-local contract, program, or script that enforces formation, activation, settlement, claim, and refund for that collateral.
-- A group with external collateral can be created only when the policy permits the external asset, mode, and settlement surface.
-- Direct `perp-join` is invalid for external collateral groups. External funding is recorded through `perp-external-evidence`.
+- External collateral modes are not valid TAP perp collateral modes.
+- `coll.surface` is invalid for TAP perp groups.
+- Direct `perp-join` is valid only for TAP collateral groups.
+- External quote metadata can appear in the pair or oracle terms, but it does not imply external custody, external settlement, or external claim/refund paths.
 
 Reader-visible pair indexes use encoded asset keys, not raw asset labels.
 
@@ -1480,88 +1479,6 @@ Entry-bound rules:
 - A group that cannot activate because of entry bounds remains cancellable after formation deadline and positions remain refundable through `perp-refund`.
 
 If a group is past the deadline and has not activated, `perp-cancel` moves it to `cancelled`. This remains valid even if the group is ready, because no participant should be stranded when activation was not submitted. Only then can a participant use `perp-refund`. Refund pays the immutable refund target. If `to` is present, it must equal the stored target.
-
-### External Evidence
-
-External collateral groups use `perp-external-evidence` to record certified facts about the external settlement surface. This action does not create spendable TAP balances and does not release external funds by itself.
-
-```json
-{
-  "op": "perp-external-evidence",
-  "gid": "<group id>",
-  "purpose": "external-lock",
-  "evidence": {
-    "v": "1",
-    "dom": "tap-perp-external-evidence-v1",
-    "net": "bitcoin:mainnet",
-    "pid": "perp-main",
-    "ph": "<policy hash>",
-    "gid": "<group id>",
-    "gh": "<group terms hash>",
-    "purpose": "external-lock",
-    "seq": "1",
-    "valid_from": "900000",
-    "valid_until": "900144",
-    "coll": { "ns": "eip155", "cid": "eip155:1", "ak": "erc20", "aid": "0x...", "dec": "6", "sym": "USDT" },
-    "mode": "evm-perp-escrow",
-    "surface": { "kind": "evm-perp-escrow", "id": "0x..." },
-    "ext": {
-      "group": "<external group id>",
-      "position": "<external position id>",
-      "tx": "<external transaction id>",
-      "index": "0",
-      "height": "123",
-      "finality": { "rule": "confirmations", "count": "12" },
-      "owner": "<external owner>",
-      "side": "long",
-      "amount": "1000000",
-      "lev": { "n": "10", "d": "1" },
-      "entry": { "max": { "p": "109", "q": "10000" } },
-      "claim": "<external payout target>",
-      "refund": "<external refund target>"
-    },
-    "state_hash": "<action hash without evidence>",
-    "sigs": [
-      { "signer": "02...", "hash": "<message hash>", "sig": { "v": "0", "r": "...", "s": "..." } }
-    ]
-  }
-}
-```
-
-External evidence rules:
-
-- `dom` must be `tap-perp-external-evidence-v1`.
-- The top-level `purpose` and `evidence.purpose` must match.
-- Accepted purposes are `external-lock`, `external-close`, and `external-liquidation`.
-- The initial funding path accepts `external-lock` for groups in formation state. It creates a formation position keyed by the external position id.
-- `external-close` and `external-liquidation` are valid only for active groups and open external positions.
-- Evidence must match the stored policy id, policy hash, group id, group terms hash, collateral asset, collateral mode, and settlement surface.
-- Supported external collateral modes are `evm-perp-escrow`, `bsc-perp-escrow`, and `solana-perp-program`.
-- `evidence.mode` must equal the group collateral mode, and `evidence.surface.kind` must equal the committed settlement surface kind.
-- Evidence must be valid at the current block according to `valid_from` and `valid_until`.
-- `state_hash` is the canonical hash of the top-level action without `evidence`.
-- The evidence payload hash is the canonical hash of `evidence` without `sigs`.
-- The signer threshold is read from the stored policy signer set and threshold.
-- The evidence signature message is:
-
-```text
-sha256(canonical_json(["tap-perp-external-evidence-v1", "tap", policy_id, policy_hash, group_id, group_terms_hash, purpose, evidence_payload_hash, seq, valid_until]))
-```
-
-- Duplicate evidence ids reject.
-- A sequence must increase for the same policy, group, purpose, collateral asset, settlement surface, and external position.
-- Evidence for one group, policy, purpose, chain id, collateral asset, settlement surface, or external position is not valid for another.
-- External lock evidence must include owner, side, amount, leverage, entry bound, claim target, refund target, external transaction id, external index, external height, and finality rule.
-- External lock evidence creates a protocol position with external claim and refund targets. TAP `perp-claim` and `perp-refund` are invalid for external-collateral positions because local recovery is enforced by the external settlement surface.
-- External close evidence must include external group id, external position id, transaction id, height, finality rule, owner, action `close`, price, open collateral before close, external state hash, computed equity, zero bounty, and recipient.
-- External liquidation evidence must include external group id, external position id, transaction id, height, finality rule, owner, action `liquidation`, price, open collateral before liquidation, external state hash, computed equity, maintenance amount, bounty amount, and recipient.
-- External terminal evidence must match the stored position owner, group, position id, settlement surface, collateral asset, open collateral, and current active position state.
-- External terminal evidence recomputes equity from stored side, leverage, entry price, open collateral, and evidence price. A mismatch rejects.
-- External liquidation evidence recomputes `maintenance = open_collateral * maintenance_bps / 10000` and rejects unless `equity <= maintenance`.
-- External close evidence rejects nonzero bounty.
-- Accepted external terminal evidence sets position open collateral to zero, stores closed equity, updates group open-collateral aggregates, updates closed-equity totals, updates liquidated-equity totals for liquidation, records the accepted price as the group mark, and writes evidence/event rows.
-- External evidence signatures certify the external settlement surface fact. The protocol commits and validates the certified fields; it does not independently prove external consensus.
-- External evidence may be recorded for reader-visible audit history. It must not by itself credit or debit TAP balances.
 
 ### Price Certificates
 
