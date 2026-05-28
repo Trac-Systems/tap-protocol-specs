@@ -444,15 +444,15 @@ Common field classes:
 | `refund` | `{ op, lock, cert? }` | Lock must exist, must not be consumed, current block must be at least `refund_after`, and any scoped control must pass unless terminal refund is available. | Returns locked funds to the refund address. |
 | `auth-cfg` with `k: "stk"` | `{ op, k, stk, rt, ctl, r, n? }` | Controller must be the current authority, stake token must exist, reward tokens must exist unless `rt` is empty, tiers must be unique and weighted. | Staking pools with weighted tiers and reward accounting. |
 | `stake` | `{ op, auth, tick, amt, tier, claim }` | Staking authority must exist, `tick` must equal its stake token, tier must exist, staker must have available balance. | Opens an independent stake position. |
-| `claim-rwd` | `{ op, auth, pos, rt }` | Position must be open, belong to `auth`, and have positive pending reward for `rt`. | Claims accrued staking rewards without unstaking. |
+| `claim-rwd` | `{ op, auth, pos, rt }` | Position must be open, belong to `auth`, and have positive pending reward for `rt`. The payout target is the stored claim target and cannot be overridden by the executor. | Claims accrued staking rewards without unstaking. |
 | `unstake` | `{ op, auth, pos, rt? }` | Position must be open, belong to `auth`, and current block must be at least its unlock height. | Returns staked principal after the lock duration. |
 | `auth-cfg` with `k: "sale"` | `{ op, k, st, pt, ctl, tre, s, n? }` | Sale and payment tokens must exist, treasury target must be valid, height and cap rules must be coherent. | Launchpads, capped sales, allowlisted sales, refund based funding. |
 | `fund-sale` | `{ op, auth, tick, amt }` | Sale authority must exist, `tick` must equal the sale token, controller must have available balance. | Deposits sale inventory. |
 | `contribute` | `{ op, auth, tick, amt, claim, alw? }` | Sale must be open, `tick` must equal the payment token, caps and allowlist must pass, contributor must have available balance. | Records a buyer contribution and sale token allocation. |
 | `finalize-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize at or before end only at hard cap, or after end when soft cap is met. | Sends payment pool to treasury and unlocks sale claims. |
 | `resolve-sale` | `{ op, auth }` | Sale must not be cancelled or finalized. It can finalize if finalization invariants hold, or mark failed/refundable after deterministic failure conditions. | Public terminal sale resolution without controller liveness. |
-| `claim-sale` | `{ op, auth, cid }` | Contribution must be open, sale must be finalized, caller must be the contribution claim address. | Contributor claims allocated sale token. |
-| `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, failed/refundable, or ended without meeting soft cap. Caller must be the contribution claim address. | Contributor gets payment token back. |
+| `claim-sale` | `{ op, auth, cid }` | Contribution must be open, sale must be finalized, and payout must go to the contribution claim address. | Contributor claims allocated sale token. |
+| `refund-sale` | `{ op, auth, cid }` | Contribution must be open. Sale must be cancelled, failed/refundable, or ended without meeting soft cap. Payout must go to the contribution claim address. | Contributor gets payment token back. |
 | `cancel-sale` | `{ op, auth }` | Controller must match, sale must allow cancellation, and sale must not be finalized or already cancelled. | Cancels an open sale. |
 | `withdraw-sale` | `{ op, auth, tick, amt, tt, to }` | Controller must match. Withdrawal is allowed after finalization, cancellation, or failed end. Target must be valid. | Returns unsold inventory or moves remaining sale token balance. |
 | `auth-cfg` with `k: "amm"` | `{ op, k, a, c, ctl, n?, att? }` | Controller must be the current authority, two distinct assets must be valid, fee rules must be coherent, and external pools must configure attestors. | Creates a constant product AMM authority. |
@@ -469,12 +469,12 @@ Common field classes:
 | `perp-join` | `{ op, gid, src, side, coll, lev, entry, claim, refund, ctx? }` | Group must be in formation, side and leverage must be allowed, entry bound must match group policy, caller must match `src`, collateral must be available, and pending same-redeem debits must not overcommit balance. Only valid for TAP-account collateral groups. | Funds a long or short TAP-collateral position in a group. |
 | `perp-external-evidence` | `{ op, gid, purpose, evidence }` | Group must use external collateral. Evidence must match the group, collateral, settlement surface, entry bound, purpose, finality, sequence, policy threshold, and state hash. | Records accepted external settlement-surface evidence without crediting spendable TAP balances. |
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past deadline. | Moves an unactivated group to cancelled state. |
-| `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, caller must equal the stored refund target, and optional `to` must equal that target. | Returns original collateral from a cancelled group. |
+| `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, and optional `to` must equal the stored refund target. Payout always goes to the stored refund target. | Returns original collateral from a cancelled group. |
 | `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation and ready. Certificate purpose must be `entry` and match policy, group, group hash, aggregate entry bounds, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
 | `perp-close` | `{ op, gid, pos, qty, cert }` | Position owner must submit, group and position must be active, quantity must be valid open collateral, and close certificate must validate. | Closes all or part of a position and reserves realized equity until settlement. |
 | `perp-liquidate` | `{ op, gid, pos, cert }` | Position must be active and below maintenance at the certified price. | Closes unsafe open collateral and records liquidation accounting. |
 | `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, expiry reached, signed settlement certificate or committed fallback must validate, and aggregate payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and claim formula. |
-| `perp-claim` | `{ op, gid, pos, to? }` | Group must be settled or defaulted, position payout must be unclaimed, caller must equal the stored claim target, and optional `to` must equal that target. | Claims a settled payout. |
+| `perp-claim` | `{ op, gid, pos, to? }` | Group must be settled or defaulted, position payout must be unclaimed, and optional `to` must equal the stored claim target. Payout always goes to the stored claim target. | Claims a settled payout. |
 
 ### Lock Action
 
@@ -1305,8 +1305,8 @@ Perp groups are isolated fixed-lifetime margin groups. A group has formation, ac
     "dust": "largest-remainder-v1"
   },
   "fee": {
-    "rules": ["settlement-positive-payout-bps-v1"],
-    "max_bps": "200",
+    "rules": ["position-reserve-bps-v1"],
+    "max_bps": "250",
     "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000", "rl": "pf" }]
   },
   "bounty": {
@@ -1342,7 +1342,7 @@ Policy fields:
 | `oracle` | Price certificate rules, staleness bounds, and fallback names. Signers and threshold are the policy signer set and `thr`. |
 | `liq` | Liquidation rule set and minimum maintenance margin. |
 | `def` | Group-local default and dust assignment rule. |
-| `fee` | Settlement fee rules, maximum bps, and canonical receiver list. Receiver shares must sum to `10000`. |
+| `fee` | Position reserve fee rules, maximum bps, and canonical receiver list. Receiver shares must sum to `10000`. |
 | `bounty` | Maximum liquidation bounty rule. |
 | `entry` | Entry-bound policy for positions formed before activation. |
 | `exp` | Last block where the policy action can be accepted. |
@@ -1414,8 +1414,8 @@ Perp fee receivers are canonical targets:
   "settle": { "expiry": "901000", "rule": "expiry-price-v1", "fallback": "last-valid-at-expiry-v1" },
   "def": { "rule": "pro-rata-positive-equity-v1", "dust": "largest-remainder-v1" },
   "fee": {
-    "rule": "settlement-positive-payout-bps-v1",
-    "bps": "200",
+    "rule": "position-reserve-bps-v1",
+    "bps": "250",
     "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000", "rl": "pf" }]
   },
   "bounty": { "rule": "operator-policy-bounty-v1", "liquidate": "policy-default" },
@@ -1641,26 +1641,31 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 `perp-close` requires the position owner. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
 
-`perp-liquidate` closes a position when equity falls below the maintenance threshold. Liquidation records remaining equity after bounty and may pay a configured bounty only if the state transition succeeds. The maximum bounty is `floor(open_collateral * liquidation_bounty_bps / 10000)` and is also capped by current equity.
+`perp-liquidate` closes a position when equity falls below the maintenance threshold. Liquidation records remaining equity and pays exactly the position's open reserved liquidation bounty when the state transition succeeds. The bounty is reserved at position open, is not capped by current equity, and cannot be consumed by PnL or bad debt.
 
-`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, applies settlement fee, and records an immutable claim formula. It does not scan positions, does not write per-position payout rows, and does not pay a settlement bounty.
+`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, moves open unused liquidation bounty reserve into fee accounting, applies reserve-based fee distribution, and records an immutable claim formula. It does not scan positions, does not write per-position payout rows, and does not pay a settlement bounty.
 
 For external collateral groups, settlement records the same terminal accounting in protocol state but does not mint or release TAP balances. Chain-local settlement, fee payment, claim, and refund are enforced by the committed settlement surface. The protocol record must still conserve the external collateral amount recorded by accepted evidence.
+
+Per-position reserve rule:
+
+```text
+total_fee_reserve = floor(gross_collateral * fee_bps / 10000)
+liquidation_bounty_reserve = floor(gross_collateral * liquidation_bounty_bps / 10000)
+marketplace_fee_reserve = total_fee_reserve - liquidation_bounty_reserve
+margin_collateral = gross_collateral - total_fee_reserve
+```
+
+`gross_collateral`, `total_fee_reserve`, `liquidation_bounty_reserve`, `marketplace_fee_reserve`, and `margin_collateral` are fixed for the position when it opens. `margin_collateral` is the collateral used for notional, equity, maintenance, close, liquidation, and settlement PnL. Formation cancellation refunds `gross_collateral`.
 
 Settlement payout rule:
 
 ```text
-settlement_balance = group_authority_balance
-initial_fee = floor(total_equity * fee_bps / 10000)
-
-if total_equity + initial_fee <= settlement_balance:
-  fee = initial_fee
-else:
-  claim_pool = floor(settlement_balance * (10000 - fee_bps) / 10000)
-  fee = settlement_balance - claim_pool
-
+settlement_balance = group authority balance
+unused_bounty_fee = open_liquidation_bounty_reserve
+fee = marketplace_fee_reserve_total + unused_bounty_fee
 claim_pool = settlement_balance - fee
-claim_basis_total = total_equity if total_equity > 0 else total_original_collateral
+claim_basis_total = total_equity if total_equity > 0 else total_margin_collateral
 claim_basis_remaining = claim_basis_total
 claim_pool_remaining = claim_pool
 ```
@@ -1698,7 +1703,7 @@ Terminal settlement state records total equity, claim pool, claimed total, total
 
 If a block containing a settlement is removed by chain reorganization, every balance debit, balance credit, receiver fee credit, staking reward allocation, settlement aggregate, claimed-total update, position status update, and terminal group status created by that settlement is removed with it. Re-applying the same surviving inscription after the reorg must produce the same state as first application.
 
-`perp-claim` pays the immutable claim target after settlement or default. The claim amount is computed from the position record and terminal settlement formula, then added to group `claimed_total`. If `to` is present, it must equal the stored claim target. Duplicate claims reject.
+`perp-claim` pays the immutable claim target after settlement or default. The claim amount is computed from the position record and terminal settlement formula, then added to group `claimed_total`. The executor does not choose the payout target. If `to` is present, it must equal the stored claim target. Duplicate claims reject.
 
 ## Staking Authority
 
@@ -1792,6 +1797,8 @@ Claim rewards:
   "rt": "tap"
 }
 ```
+
+Reward claims pay the stake position's stored claim target. The executor cannot redirect the payout, cannot claim future accrual, and duplicate claims for the same accrued amount reject.
 
 Unstake:
 
@@ -1937,6 +1944,7 @@ Rules:
 - `resolve-sale` writes one terminal resolution record. Duplicate or conflicting sale terminal actions reject atomically.
 - `claim-sale` lets a contributor claim allocated sale tokens after finalization.
 - `refund-sale` lets a contributor recover payment tokens if the sale is cancelled, failed/refundable, or fails its soft cap after the end height.
+- `claim-sale` and `refund-sale` pay the contribution's stored claim address. The executor cannot redirect the payout.
 - `cancel-sale` is only valid when cancellation is enabled by `s.cx`.
 - `withdraw-sale` lets the controller withdraw remaining sale tokens after finalization, cancellation, or failed end.
 
