@@ -1311,9 +1311,7 @@ Perp groups are isolated fixed-lifetime margin groups. A group has formation, ac
   },
   "bounty": {
     "rules": {
-      "activate": { "mode": "cap", "bps": "0", "cap": "3000", "public": true },
-      "liquidate": { "mode": "cap", "bps": "0", "cap": "0", "public": true },
-      "settle": { "mode": "cap", "bps": "0", "cap": "3000", "public": true }
+      "liquidate": { "mode": "position-collateral-bps", "bps": "50", "public": true }
     }
   },
   "entry": {
@@ -1345,7 +1343,7 @@ Policy fields:
 | `liq` | Liquidation rule set and minimum maintenance margin. |
 | `def` | Group-local default and dust assignment rule. |
 | `fee` | Settlement fee rules, maximum bps, and canonical receiver list. Receiver shares must sum to `10000`. |
-| `bounty` | Submitter bounty caps for activation, liquidation, and settlement. |
+| `bounty` | Maximum liquidation bounty rule. |
 | `entry` | Entry-bound policy for positions formed before activation. |
 | `exp` | Last block where the policy action can be accepted. |
 
@@ -1420,7 +1418,7 @@ Perp fee receivers are canonical targets:
     "bps": "200",
     "receivers": [{ "tt": "a", "to": "bc1p...", "share": "10000", "rl": "pf" }]
   },
-  "bounty": { "rule": "operator-policy-bounty-v1", "activate": "policy-default", "liquidate": "policy-default", "settle": "policy-default" },
+  "bounty": { "rule": "operator-policy-bounty-v1", "liquidate": "policy-default" },
   "oracle": { "rule": "spot-vwap-v1", "source": "spot", "max_age": "144" },
   "entry": { "mode": "one-sided-v1", "required": true, "allow_unbounded": false, "max_slippage_bps": "500" }
 }
@@ -1428,7 +1426,7 @@ Perp fee receivers are canonical targets:
 
 The group id is derived from inscription id plus action index. It is not read from the payload.
 
-Group creation records policy id, policy hash, group terms hash, pair assets, collateral asset, formation bounds, expiry, readiness thresholds, leverage bounds, maintenance margin, fee rule, fee receivers, bounty caps, oracle rule, entry-bound policy, empty aggregate entry bounds, and state `formation`.
+Group creation records policy id, policy hash, group terms hash, pair assets, collateral asset, formation bounds, expiry, readiness thresholds, leverage bounds, maintenance margin, fee rule, fee receivers, liquidation bounty rule, oracle rule, entry-bound policy, empty aggregate entry bounds, and state `formation`.
 
 The group fee rule must be an exact copy of the referenced policy fee rule. It must not reduce fees, increase fees, reorder receivers, drop receivers, add receivers, change receiver targets, change receiver roles, change shares, or replace the rule name. A group whose fee rule differs from the policy fee rule rejects even if the difference would reduce the fee.
 
@@ -1643,17 +1641,16 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 `perp-close` requires the position owner. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
 
-`perp-liquidate` closes a position when equity falls below the maintenance threshold. Liquidation records equity and may pay a configured bounty only if the state transition succeeds.
+`perp-liquidate` closes a position when equity falls below the maintenance threshold. Liquidation records remaining equity after bounty and may pay a configured bounty only if the state transition succeeds. The maximum bounty is `floor(open_collateral * liquidation_bounty_bps / 10000)` and is also capped by current equity.
 
-`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, applies settlement fee and bounty, and records an immutable claim formula. It does not scan positions and does not write per-position payout rows.
+`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, applies settlement fee, and records an immutable claim formula. It does not scan positions, does not write per-position payout rows, and does not pay a settlement bounty.
 
 For external collateral groups, settlement records the same terminal accounting in protocol state but does not mint or release TAP balances. Chain-local settlement, fee payment, claim, and refund are enforced by the committed settlement surface. The protocol record must still conserve the external collateral amount recorded by accepted evidence.
 
 Settlement payout rule:
 
 ```text
-settlement_bounty = min(configured_settlement_bounty, available_bounty_reserve)
-settlement_balance = group_authority_balance - settlement_bounty
+settlement_balance = group_authority_balance
 initial_fee = floor(total_equity * fee_bps / 10000)
 
 if total_equity + initial_fee <= settlement_balance:
@@ -1668,7 +1665,7 @@ claim_basis_remaining = claim_basis_total
 claim_pool_remaining = claim_pool
 ```
 
-If the payable bounty is zero, settlement remains valid. Bounty availability is not a terminal validity condition.
+Liquidation bounty availability is not a terminal settlement validity condition.
 
 Claim payout rule:
 
@@ -1697,9 +1694,9 @@ fee_dust = fee - sum(receiver_fee_i)
 
 Account fee receivers credit the receiver account. Staking reward receivers credit the target staking authority reward accumulator for the group collateral ticker using the same reward accounting as ordinary staking reward allocations. A settlement that cannot credit an `sr` receiver rejects. Refund, cancel, and unactivated exit paths do not allocate settlement fees.
 
-Terminal settlement state records total equity, claim pool, claimed total, total settlement fee, receiver-level fee amounts, bounty amount, residual, default flag, open-side aggregate equity, closed equity, and deterministic dust handling. Duplicate settlement rejects.
+Terminal settlement state records total equity, claim pool, claimed total, total settlement fee, receiver-level fee amounts, residual, default flag, open-side aggregate equity, closed equity, and deterministic dust handling. Duplicate settlement rejects.
 
-If a block containing a settlement is removed by chain reorganization, every balance debit, balance credit, receiver fee credit, staking reward allocation, bounty record, settlement aggregate, claimed-total update, position status update, and terminal group status created by that settlement is removed with it. Re-applying the same surviving inscription after the reorg must produce the same state as first application.
+If a block containing a settlement is removed by chain reorganization, every balance debit, balance credit, receiver fee credit, staking reward allocation, settlement aggregate, claimed-total update, position status update, and terminal group status created by that settlement is removed with it. Re-applying the same surviving inscription after the reorg must produce the same state as first application.
 
 `perp-claim` pays the immutable claim target after settlement or default. The claim amount is computed from the position record and terminal settlement formula, then added to group `claimed_total`. If `to` is present, it must equal the stored claim target. Duplicate claims reject.
 
@@ -1733,8 +1730,13 @@ Create a staking authority:
         "w": "1"
       },
       {
+        "id": "6m",
+        "dur": "25920",
+        "w": "2"
+      },
+      {
         "id": "12m",
-        "dur": "51840",
+        "dur": "52560",
         "w": "4"
       }
     ]
@@ -1756,6 +1758,8 @@ Fields:
 | `r.ep` | Empty pool policy. Values are `reject`, `hold`, or `carry`. |
 | `r.tr` | Tiers. Each tier has `id`, block duration `dur`, and weight `w`. |
 | `r.ud` | Optional update delay. The default is `0`. |
+
+Tier ids are labels. `dur` is the exact number of TAP blocks added to the staking block to derive the unlock height.
 
 Empty pool policies:
 
