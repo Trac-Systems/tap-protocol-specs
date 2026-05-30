@@ -2,14 +2,14 @@
 
 TAP is an Ordinals metaprotocol for fungible tokens and token backed state on Bitcoin L1.
 
-The base token model uses inscription based deploy, mint, and transfer operations. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, sale authorities, and AMM authorities.
+The base token model uses inscription based deploy, mint, and transfer operations. TAP extends that model with account level actions, signed authorities, internal transfers, locks, delegated execution, staking pools, sale authorities, AMM authorities, and perp groups.
 
 The protocol has two layers:
 
 | Layer | Purpose |
 | --- | --- |
 | External token layer | Deploy, mint, and inscribe transferable token balances. |
-| Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, AMM pools, and privileged mints. |
+| Internal action layer | Tap confirmed inscriptions that update account state without moving a transferable inscription. This layer powers mass sends, trades, authorities, locks, staking, sales, AMM pools, perp groups, and privileged mints. |
 
 An inscription is considered tapped when it is sent back to the account that owns or controls the action. Some signed authority redeems do not require tapping by the submitter because the authority signature is the authorization.
 
@@ -30,13 +30,13 @@ Mainnet activation heights for this specification are:
 | Value stringify gate | `885588` |
 | DMT NAT miner rewards | `885588` |
 | Token authority whitelist fix | `916233` |
-| Token locks, delegated locks, certified control, staking, sales, AMM authorities, and conditional obligations | `999999999` |
 | Miner reward shield | `941848` |
 | Miner reward transfer execution shield | `942002` |
+| Token locks, delegated locks, certified control, staking, sales, AMM authorities, conditional obligations, and perp groups | `952317` |
 
 Non-mainnet indexers may activate feature gates at height `0` by local configuration. Mainnet activation heights are part of consensus for production indexers.
 
-Height `999999999` is the mainnet activation gate for the action authority feature set in this specification. A production release can only change that height by changing the consensus configuration used by indexers.
+Height `952317` is the mainnet activation gate for the action authority feature set in this specification.
 
 From the value stringify gate, `max`, `lim`, and `amt` values must not be JSON numbers. They must be encoded as strings. The same rule is rechecked for action amounts that are produced from delegated templates.
 
@@ -464,8 +464,8 @@ Common field classes:
 | `ob-claim` | `{ op, ob, preimage }` | Obligation must be open and unconsumed. The preimage must satisfy the saved hash before refund is available. | Releases an obligation to its claim destination. |
 | `ob-refund` | `{ op, ob }` | Obligation must be open and unconsumed. Current block must be at least the saved refund height. | Returns an obligation to its refund destination. |
 | `ob-final` | `{ op, ob, preimage }` | Same condition as `ob-claim`, with destination adapter finalization. | Finalizes adapter settlement, for example crediting an AMM reserve. |
-| `perp-policy` | `{ op, id, v, dom, net, seq, thr, signers, assets, limits, oracle, liq, def, fee, bounty, entry, exp, sigs, hash? }` | Policy id, domain, network, constraints, entry-bound policy, signers, threshold, signatures, and expiry must validate. Updates must increase `seq` and satisfy previous signer threshold. | Registers an operator policy for isolated perp groups. |
-| `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, entry, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, collateral, formation, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, oracle, and entry-bound terms must fit the policy. | Creates a non-active group in formation state. |
+| `perp-policy` | `{ op, id, v, dom, net, seq, thr, signers, assets, limits, oracle, liq, def, fee, bounty, entry, exp, sigs, hash? }` | Policy id, domain, network, asset policy, constraints, entry-bound policy, signers, threshold, signatures, and expiry must validate. Updates must increase `seq` and satisfy previous signer threshold. | Registers an operator policy for isolated perp groups. |
+| `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, entry, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, TAP collateral, formation, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, oracle, and entry-bound terms must fit the policy. | Creates a non-active group in formation state. |
 | `perp-join` | `{ op, gid, src, side, coll, lev, entry, claim, refund, ctx? }` | Group must be in formation, side and leverage must be allowed, entry bound must match group policy, caller must match `src`, collateral must be available, and pending same-redeem debits must not overcommit balance. Only valid for TAP-account collateral groups. | Funds a long or short TAP-collateral position in a group. |
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past deadline. | Moves an unactivated group to cancelled state. |
 | `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, and optional `to` must equal the stored refund target. Payout always goes to the stored refund target. | Returns original collateral from a cancelled group. |
@@ -1114,7 +1114,7 @@ sha256(JSON.stringify([
 
 - Signature, signer, threshold, authority participation, nonce, cancellation, expiry, template, constraint, and finalizer rules are the same as delegated locks unless this section defines a stricter rule.
 - Finalizer signatures for `execute-action` use the `tap-delegated-final-action-v1` domain and sign the action delegation message plus the filled final action.
-- An old lock delegation signature cannot execute an `execute-action`.
+- A lock-delegation signature cannot execute an `execute-action`.
 - A generic action delegation cannot execute a `lock`.
 - A nonce consumed by `execute-action` cannot be used again by `execute` or another `execute-action`.
 
@@ -1285,7 +1285,7 @@ Perp groups are isolated fixed-lifetime margin groups. A group has formation, ac
     "min_form": "1",
     "max_form": "2016",
     "min_ratio": { "n": "0", "d": "1" },
-    "max_ratio": { "n": "999999999", "d": "1" }
+    "max_ratio": { "n": "1000000", "d": "1" }
   },
   "oracle": {
     "rules": ["spot-vwap-v1"],
@@ -1319,7 +1319,7 @@ Perp groups are isolated fixed-lifetime margin groups. A group has formation, ac
     "allow_unbounded": false,
     "max_slippage_bps": "500"
   },
-  "exp": "999999999",
+  "exp": "953000",
   "sigs": [
     { "signer": "02...", "hash": "<message hash>", "sig": { "v": "0", "r": "...", "s": "..." } }
   ]
@@ -1336,7 +1336,7 @@ Policy fields:
 | `seq` | Monotonic policy sequence. |
 | `thr` | Required signature count. |
 | `signers` | Policy signer set. Duplicate signers reject. |
-| `assets` | Allowed TAP and external assets. Empty `wildcard-or-list` lists allow the namespace. Lists must be unique after canonicalization. |
+| `assets` | Allowed TAP assets, external quote assets, and pair assets. Empty `wildcard-or-list` lists allow the namespace. External assets are pair and oracle metadata only. Lists must be unique after canonicalization. |
 | `limits` | Bounds for leverage, collateral, notional, formation, duration, and maintenance. |
 | `oracle` | Price certificate rules, staleness bounds, and fallback names. Signers and threshold are the policy signer set and `thr`. |
 | `liq` | Liquidation rule set and minimum maintenance margin. |
@@ -1400,7 +1400,7 @@ Perp fee receivers are canonical targets:
     "min_long_not": "1",
     "min_short_not": "1",
     "ratio_min": { "n": "0", "d": "1" },
-    "ratio_max": { "n": "999999999", "d": "1" },
+    "ratio_max": { "n": "1000000", "d": "1" },
     "max_imbalance_not": "1000000"
   },
   "lev": {
@@ -1544,7 +1544,7 @@ Certificate rules:
 - Failed certificates do not consume the sequence.
 - Fallback settlement consumes a deterministic fallback marker and does not create a price-certificate history entry.
 
-For non-TAP collateral enforcement, a settlement certificate must also bind the exact chain-local settlement payload. At minimum the bound payload must include group id, operator fee amount, pool fee amount, claim pool, total equity, aggregate settlement terms, and the chain-local claim formula accepted by that chain. A valid certificate for one conserved settlement set must not be reusable with another conserved settlement set.
+Perp price certificates may bind external quote assets in `pair` metadata. External quote metadata does not authorize non-TAP collateral, external settlement, external evidence, or external balance mutation.
 
 The certificate signature message is:
 
@@ -1562,7 +1562,7 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 `perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, moves open unused liquidation bounty reserve into fee accounting, applies reserve-based fee distribution, and records an immutable claim formula. It does not scan positions, does not write per-position payout rows, and does not pay a settlement bounty.
 
-For external collateral groups, settlement records the same terminal accounting in protocol state but does not mint or release TAP balances. Chain-local settlement, fee payment, claim, and refund are enforced by the committed settlement surface. The protocol record must still conserve the external collateral amount recorded by accepted evidence.
+External collateral groups are not valid TAP perp groups. Non-TAP collateral modes, external collateral surfaces, and external evidence actions reject without balance mutation.
 
 Per-position reserve rule:
 
