@@ -470,9 +470,9 @@ Common field classes:
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past the formation deadline. If the group is ready, the activation deadline must also be past. | Moves an unactivated failed-formation or missed-activation group to cancelled state. |
 | `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, and optional `to` must equal the stored refund target. Payout always goes to the stored refund target. | Returns original collateral from a cancelled group. |
 | `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation, ready, past the formation deadline, and not past the activation deadline. Certificate purpose must be `entry` and match policy, group, group hash, aggregate entry bounds, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
-| `perp-close` | `{ op, gid, pos, qty, cert }` | Position owner must submit, group and position must be active, quantity must be valid open collateral, and close certificate must validate. | Closes all or part of a position and reserves realized equity until settlement. |
-| `perp-liquidate` | `{ op, gid, pos, cert }` | Position must be active and below maintenance at the certified price. | Closes unsafe open collateral and records liquidation accounting. |
-| `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, expiry reached, signed settlement certificate or committed fallback must validate, and aggregate payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and claim formula. |
+| `perp-close` | `{ op, gid, pos, qty, cert }` | Position owner must submit, group and position must be active, current block must be before group expiry, quantity must be valid open collateral, and close certificate must validate. | Closes all or part of a position and reserves realized equity until settlement. |
+| `perp-liquidate` | `{ op, gid, pos, cert }` | Group and position must be active, current block must be before group expiry, and position equity must be below maintenance at the certified price. | Closes unsafe open collateral and records liquidation accounting. |
+| `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, current block must be at or after group expiry, signed settlement certificate or committed fallback must validate, and aggregate payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and claim formula. |
 | `perp-claim` | `{ op, gid, pos, to? }` | Group must be settled or defaulted, position payout must be unclaimed, and optional `to` must equal the stored claim target. Payout always goes to the stored claim target. | Claims a settled payout. |
 
 ### Lock Action
@@ -1367,7 +1367,7 @@ Perp fee receivers are canonical targets:
 - `tt: "h"` receivers must target an existing staking authority and may only use `sr`.
 - `sr` is only valid for TAP-collateral groups. It credits the staking authority reward accumulator for the group collateral ticker.
 - If the staking authority restricts reward tickers, the group collateral ticker must be allowed.
-- If the staking authority has no shares, `sr` allocation is valid only when the authority empty-pool policy preserves rewards for later accounting.
+- Terminal-critical `sr` allocation remains valid when the staking authority has no current shares. The reward amount is carried for later reward accounting instead of rejecting the terminal action.
 - Malformed targets, unsafe authority ids, zero shares, negative values, decimal values, exponent notation, non-string amount fields, unknown roles, and non-canonical receiver shapes reject.
 
 ### Group Formation
@@ -1564,11 +1564,13 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 `perp-activate` requires a ready formation group, a block height after the formation deadline, a block height at or before `form.activate_by`, and a valid certificate. The certificate price must satisfy the stored aggregate entry bounds before any mutation. It stores the entry price and moves the group to active state. Position activity is derived from the position and group state. Original-collateral refund is no longer available after activation.
 
-`perp-close` requires the position owner. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
+`perp-close` requires the position owner and is valid only before group expiry. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
 
-`perp-liquidate` closes a position when equity falls below the maintenance threshold. Liquidation records remaining equity and pays exactly the position's open reserved liquidation bounty when the state transition succeeds. The bounty is reserved at position open, is not capped by current equity, and cannot be consumed by PnL or bad debt.
+`perp-liquidate` is valid only before group expiry and closes a position when equity falls below the maintenance threshold. Liquidation records remaining equity and pays exactly the position's open reserved liquidation bounty when the state transition succeeds. The bounty is reserved at position open, is not capped by current equity, and cannot be consumed by PnL or bad debt.
 
-`perp-settle` is valid at or after expiry. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, moves open unused liquidation bounty reserve into fee accounting, applies reserve-based fee distribution, and records an immutable claim formula. It does not scan positions, does not write per-position payout rows, and does not pay a settlement bounty.
+`perp-settle` is valid at or after expiry. It is permissionless under fixed group terms and cannot choose arbitrary recipients, fees, price rules, or payout math. It uses either a valid settlement certificate or, after `expiry + oracle.max_age`, the committed `last-valid-at-expiry-v1` fallback. It computes terminal group totals from stored aggregates, moves open unused liquidation bounty reserve into fee accounting, applies reserve-based fee distribution, and records an immutable claim formula. It does not scan positions, does not write per-position payout rows, and does not pay a settlement bounty.
+
+Close and liquidation are active-window actions. Settlement is a terminal-window action. There is no block where close, liquidation, and settlement are valid for the same active group.
 
 External collateral groups are not valid TAP perp groups. Non-TAP collateral modes, external collateral surfaces, and external evidence actions reject without balance mutation.
 
@@ -1622,7 +1624,7 @@ fee_dust = fee - sum(receiver_fee_i)
 
 `fee_dust` is assigned one atomic unit at a time to receivers sorted by largest remainder, with receiver list order as the deterministic tie breaker. Receiver-level fee amounts sum exactly to `fee`.
 
-Account fee receivers credit the receiver account. Staking reward receivers credit the target staking authority reward accumulator for the group collateral ticker using the same reward accounting as ordinary staking reward allocations. A settlement that cannot credit an `sr` receiver rejects. Refund, cancel, and unactivated exit paths do not allocate settlement fees.
+Account fee receivers credit the receiver account. Staking reward receivers credit the target staking authority reward accumulator for the group collateral ticker using reward accounting. A settlement with a malformed, missing, wrong-kind, or reward-ticker-incompatible `sr` receiver rejects. If the receiver is a valid staking authority but has zero current shares, the settlement carries the reward for later accounting instead of rejecting. Refund, cancel, and unactivated exit paths do not allocate settlement fees.
 
 Terminal settlement state records total equity, claim pool, claimed total, total settlement fee, receiver-level fee amounts, residual, default flag, open-side aggregate equity, closed equity, and deterministic dust handling. Duplicate settlement rejects.
 
@@ -1695,7 +1697,7 @@ Empty pool policies:
 
 | Policy | Behavior |
 | --- | --- |
-| `reject` | Reward allocation to a staking authority with no shares is invalid. |
+| `reject` | Ordinary reward allocation to a staking authority with no shares is invalid. Terminal-critical reward routing that was valid when funds entered the terminal-dependent state carries instead of rejecting. |
 | `hold` | Reward allocation with no shares is accepted and kept in the authority balance without distribution. |
 | `carry` | Reward allocation with no shares is carried and distributed when shares exist. Dust that cannot yet be distributed is also carried. |
 
