@@ -131,7 +131,7 @@ Rules:
 
 ## Jubilee Rules
 
-From block `824544`, new cursed inscriptions are no longer accepted.
+From block `824544`, new cursed inscriptions are invalid.
 
 Before block `824544`, cursed `token-deploy`, `token-mint`, and `token-transfer` inscriptions are addressed without a dash in the inscription. Indexers internally prefix those tickers with `-` to separate them from their non-cursed counterpart.
 
@@ -465,11 +465,11 @@ Common field classes:
 | `ob-refund` | `{ op, ob }` | Obligation must be open and unconsumed. Current block must be at least the saved refund height. | Returns an obligation to its refund destination. |
 | `ob-final` | `{ op, ob, preimage }` | Same condition as `ob-claim`, with destination adapter finalization. | Finalizes adapter settlement, for example crediting an AMM reserve. |
 | `perp-policy` | `{ op, id, v, dom, net, seq, thr, signers, assets, limits, oracle, liq, def, fee, bounty, entry, exp, sigs, hash? }` | Policy id, domain, network, asset policy, constraints, entry-bound policy, signers, threshold, signatures, and expiry must validate. Updates must increase `seq` and satisfy previous signer threshold. | Registers an operator policy for isolated perp groups. |
-| `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, entry, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, TAP collateral, formation deadline, activation deadline, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, oracle, and entry-bound terms must fit the policy. | Creates a non-active group in formation state. |
+| `perp-open-group` | `{ op, pid, ph, pair, coll, form, ready, lev, close, liq, settle, def, fee, bounty, oracle, entry, ctx?, hash? }` | Referenced policy must exist and match `ph`. Pair, TAP-account collateral, formation deadline, activation deadline, expiry, readiness, leverage, liquidation, settlement, default, fee, bounty, oracle, and entry-bound terms must fit the policy. Group creation is invalid after the formation deadline. | Creates a non-active group in formation state. |
 | `perp-join` | `{ op, gid, src, side, coll, lev, entry, claim, refund, ctx? }` | Group must be in formation, side and leverage must be allowed, entry bound must match group policy, caller must match `src`, collateral must be available, and pending same-redeem debits must not overcommit balance. Only valid for TAP-account collateral groups. | Funds a long or short TAP-collateral position in a group. |
 | `perp-cancel` | `{ op, gid }` | Group must be in formation and past the formation deadline. If the group is ready, the activation deadline must also be past. | Moves an unactivated failed-formation or missed-activation group to cancelled state. |
 | `perp-refund` | `{ op, gid, pos, to? }` | Group must be cancelled, position must be unrefunded, and optional `to` must equal the stored refund target. Payout always goes to the stored refund target. | Returns original collateral from a cancelled group. |
-| `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation, ready, past the formation deadline, and not past the activation deadline. Certificate purpose must be `entry` and match policy, group, group hash, aggregate entry bounds, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
+| `perp-activate` | `{ op, gid, bto?, cert }` | Group must be in formation, ready, at a block greater than the formation deadline, and at a block less than or equal to the activation deadline. Certificate purpose must be `entry` and match policy, group, group hash, aggregate entry bounds, state hash, sequence, signer threshold, and block validity. | Freezes entry price and moves the group to active state. |
 | `perp-close` | `{ op, gid, pos, qty, cert }` | Position owner must submit, group and position must be active, current block must be before group expiry, quantity must be valid open collateral, and close certificate must validate. | Closes all or part of a position and reserves realized equity until settlement. |
 | `perp-liquidate` | `{ op, gid, pos, cert }` | Group and position must be active, current block must be before group expiry, and position equity must be below maintenance at the certified price. | Closes unsafe open collateral and records liquidation accounting. |
 | `perp-settle` | `{ op, gid, bto?, cert }` or `{ op, gid, bto?, fallback: "last-valid-at-expiry-v1" }` | Group must be active, current block must be at or after group expiry, signed settlement certificate or committed fallback must validate, and aggregate payout math must conserve locked collateral. | Records terminal settlement, fees, bounties, default state, and claim formula. |
@@ -936,7 +936,7 @@ authority account
   v
 delegation cancel record
   |
-  | same auth + nonce can no longer execute
+  | same auth + nonce cannot execute
   v
 stale delegated execution is unusable
 ```
@@ -1427,20 +1427,23 @@ The group id is derived from inscription id plus action index. It is not read fr
 
 Group creation records policy id, policy hash, group terms hash, pair assets, collateral asset, formation bounds, activation deadline, expiry, readiness thresholds, leverage bounds, maintenance margin, fee rule, fee receivers, liquidation bounty rule, oracle rule, entry-bound policy, empty aggregate entry bounds, and state `formation`.
 
+The group creation block must be less than or equal to `form.deadline`.
+
 `form.start`, `form.deadline`, `form.activate_by`, and `settle.expiry` are block heights. They must satisfy:
 
 - `form.start <= form.deadline`
 - `form.deadline < form.activate_by`
 - `form.activate_by < settle.expiry`
 
-The formation deadline is the join-window boundary. Activation before the formation deadline rejects. A ready group may activate after the formation deadline and at or before `form.activate_by`. If a ready group is not activated by `form.activate_by`, it can be cancelled as missed activation and positions can refund.
+The formation deadline is the join-window boundary. Joins are valid from `form.start` through `form.deadline`, inclusive. Activation is valid only when the block is greater than `form.deadline` and less than or equal to `form.activate_by`. If a ready group is not activated by `form.activate_by`, it can be cancelled as missed activation and positions can refund.
 
 The group fee rule must be an exact copy of the referenced policy fee rule. It must not reduce fees, increase fees, reorder receivers, drop receivers, add receivers, change receiver targets, change receiver roles, change shares, or replace the rule name. A group whose fee rule differs from the policy fee rule rejects even if the difference would reduce the fee.
 
 Collateral mode is explicit:
 
 - `tap-account` collateral debits and credits TAP balances inside the protocol.
-- External collateral modes are not valid TAP perp collateral modes.
+- The collateral asset must be a deployed TAP ticker.
+- External collateral modes are invalid TAP perp collateral modes.
 - `coll.surface` is invalid for TAP perp groups.
 - Direct `perp-join` is valid only for TAP collateral groups.
 - External quote metadata can appear in the pair or oracle terms, but it does not imply external custody, external settlement, or external claim/refund paths.
@@ -1468,7 +1471,7 @@ Raw tickers, symbols, chain ids, and external asset ids are not written directly
 }
 ```
 
-For `tap-account` collateral, join debits the caller's available collateral and credits the group authority. Same-redeem pending debits are included before acceptance. `claim` and `refund` are immutable payout targets for that position.
+For `tap-account` collateral, join debits the caller's available collateral and credits the group authority. Same-redeem pending debits are included before acceptance. `claim` and `refund` are immutable payout targets for that position. Join is invalid before `form.start` and after `form.deadline`.
 
 Entry-bound rules:
 
@@ -1486,7 +1489,7 @@ Entry-bound rules:
 - If activation price violates aggregate bounds, activation rejects without consuming certificate replay state and without mutating group state.
 - A group that cannot activate because of entry bounds remains cancellable after `form.activate_by` and positions remain refundable through `perp-refund`.
 
-If a group is past the formation deadline and not ready, `perp-cancel` moves it to `cancelled`. If a group is ready, `perp-cancel` rejects until `form.activate_by` has passed. This prevents third-party cancellation of a ready group during the activation window while preserving missed-activation recovery. Only after cancellation can a participant use `perp-refund`. Refund pays the immutable refund target. If `to` is present, it must equal the stored target.
+If a group is past the formation deadline and not ready, `perp-cancel` moves it to `cancelled`. If a group is ready, `perp-cancel` is invalid until the block is greater than `form.activate_by`. Only after cancellation can a participant use `perp-refund`. Refund pays the immutable refund target. If `to` is present, it must equal the stored target.
 
 ### Price Certificates
 
@@ -1524,7 +1527,7 @@ Price-bearing actions carry `cert`. The certified price is inside `cert.price`.
 }
 ```
 
-`perp-settle` may use the committed no-new-signature fallback after `expiry + oracle.max_age`:
+`perp-settle` may use the committed no-new-signature fallback when the block is greater than `expiry + oracle.max_age`:
 
 ```json
 {
@@ -1562,7 +1565,7 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 ### Active And Terminal State
 
-`perp-activate` requires a ready formation group, a block height after the formation deadline, a block height at or before `form.activate_by`, and a valid certificate. The certificate price must satisfy the stored aggregate entry bounds before any mutation. It stores the entry price and moves the group to active state. Position activity is derived from the position and group state. Original-collateral refund is no longer available after activation.
+`perp-activate` requires a ready formation group, a block height greater than the formation deadline, a block height less than or equal to `form.activate_by`, and a valid certificate. The certificate price must satisfy the stored aggregate entry bounds before any mutation. It stores the entry price and moves the group to active state. Position activity is derived from the position and group state. Original-collateral refund is unavailable after activation.
 
 `perp-close` requires the position owner and is valid only before group expiry. It computes realized equity for the closed collateral at the certified price and reserves that equity until terminal settlement. It does not create an immediate claimable payout.
 
@@ -1572,7 +1575,7 @@ sha256(canonical_json(["tap-perp-price-v1", "tap", policy_id, policy_hash, purpo
 
 Close and liquidation are active-window actions. Settlement is a terminal-window action. There is no block where close, liquidation, and settlement are valid for the same active group.
 
-External collateral groups are not valid TAP perp groups. Non-TAP collateral modes, external collateral surfaces, and external evidence actions reject without balance mutation.
+External collateral groups are invalid TAP perp groups. Non-TAP collateral modes, external collateral surfaces, and external evidence actions reject without balance mutation.
 
 Per-position reserve rule:
 
@@ -1602,7 +1605,7 @@ Liquidation bounty availability is not a terminal settlement validity condition.
 Claim payout rule:
 
 ```text
-position_basis = position_equity if total_equity > 0 else position_original_collateral
+position_basis = position_equity if total_equity > 0 else position_margin_collateral
 
 if position_basis == claim_basis_remaining:
   payout = claim_pool_remaining
@@ -1697,7 +1700,7 @@ Empty pool policies:
 
 | Policy | Behavior |
 | --- | --- |
-| `reject` | Ordinary reward allocation to a staking authority with no shares is invalid. Terminal-critical reward routing that was valid when funds entered the terminal-dependent state carries instead of rejecting. |
+| `reject` | A new `sr` allocation is invalid when the staking authority has no shares at allocation validation. A terminal-critical `sr` allocation that was valid when funds entered the terminal-dependent state carries when current shares are zero. |
 | `hold` | Reward allocation with no shares is accepted and kept in the authority balance without distribution. |
 | `carry` | Reward allocation with no shares is carried and distributed when shares exist. Dust that cannot yet be distributed is also carried. |
 
